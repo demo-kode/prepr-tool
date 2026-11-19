@@ -3,7 +3,7 @@
   <p><strong>Review agent work locally, before the PR.</strong></p>
 </div>
 
-![PrePR dark interface showing a synthetic search change and a line comment](docs/assets/review.png)
+![PrePR review: file list with status marks, split diff, agent reply waiting on reviewer, collapsed resolved thread](docs/assets/review.png)
 
 <p align="center"><sub>Demo code and fictional feedback.</sub></p>
 
@@ -56,6 +56,10 @@ Watching needs agent session alive. Session ended? Ask same agent to resume.
 No live watch also works: tell agent to read feedback when done commenting.
 
 ## Page
+
+![Commits tab: commits per repo with expanded details](docs/assets/commits.png)
+
+![Completed tab: shipped review with PR submitted token, kept review](docs/assets/completed.png)
 
 | | |
 | --- | --- |
