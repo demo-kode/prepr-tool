@@ -346,8 +346,33 @@ function renderDiscussion(){const panel=document.querySelector('.discussion');pa
   await openReview(state.review.id,null,selection);let node=document.querySelector(`[data-thread="${t.id}"]`);
   if(!node){await openReview(state.review.id,t.snapshot_id,selection);node=document.querySelector(`[data-thread="${t.id}"]`);}node?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.side==='file'?'Comment on file':t.code),renderThread(t));panel.append(item);}
 }
-async function home(){const reviews=await api('/api/reviews');const page=el('section','home'),intro=el('div','home-intro'),copy=el('div');copy.append(el('div','eyebrow','Your workspace'),el('h1','','Reviews before pull requests'),el('p','','Inspect the changes. Leave feedback where it matters.'));intro.append(copy,el('span','pill purple',`${reviews.length} reviews`));page.append(intro);
- for(const r of reviews){const link=el('a','review-item');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));const meta=el('div','meta-line');meta.append(el('span','',r.id),el('span','',r.decision?'Closed · '+(r.decision.action==='keep'?'kept locally':r.decision.status):`${r.openThreads} open threads`),el('span','',`Updated ${time(r.updated)}`));link.append(meta);page.append(link);}
- if(!reviews.length){const empty=el('div','empty-state');empty.append(el('h2','','Ready for your first review'),el('p','','Publish a task manifest from the workspace CLI.'),el('code','','python3 review.py publish task.json'));page.append(empty);}app.replaceChildren(page);}
+// Home: Active vs Completed (kept, shipped, blocked).
+const completed=r=>['kept','shipped','blocked'].includes(r.decision?.status);
+async function home(tab){
+  if(tab)state.homeTab=tab;state.homeTab=state.homeTab||(new URLSearchParams(location.search).get('tab')==='completed'?'completed':'active');
+  const reviews=await api('/api/reviews'),done=reviews.filter(completed),active=reviews.filter(r=>!completed(r));
+  const page=el('section','home'),intro=el('div','home-intro'),copy=el('div');
+  copy.append(el('div','eyebrow','Your workspace'),el('h1','','Reviews before pull requests'),el('p','','Inspect the changes. Leave feedback where it matters.'));intro.append(copy);page.append(intro);
+  const tabs=el('nav','tabs home-tabs');
+  for(const [id,label,list] of [['active','Active',active],['completed','Completed',done]]){
+    const b=btn(label,()=>{const url=new URL(location);url.search=id==='completed'?'?tab=completed':'';history.replaceState(null,'',url);return home(id);},'tab'+(state.homeTab===id?' active':''));b.append(el('span','count',String(list.length)));tabs.append(b);
+  }
+  page.append(tabs);
+  const list=state.homeTab==='completed'?done:active;
+  for(const r of list){
+    const item=el('div','review-item'),link=el('a','review-link');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));
+    const meta=el('div','meta-line'),d=r.decision;meta.append(el('span','',r.id));
+    if(d){const [cls,text]={kept:['kept','Kept'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Creating PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
+    if(!completed(r))meta.append(el('span','',`${r.openThreads} open threads`));
+    meta.append(el('span','',`Updated ${time(r.updated)}`));link.append(meta);item.append(link);
+    if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!confirm(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));
+    page.append(item);
+  }
+  if(!list.length){const empty=el('div','empty-state');
+    if(state.homeTab==='completed')empty.append(el('h2','','No completed reviews'),el('p','','Reviews you Keep or Ship appear here.'));
+    else empty.append(el('h2','','Ready for your first review'),el('p','','Your agent publishes one through the prepr-review skill.'),el('code','','python3 review.py publish task.json'));
+    page.append(empty);}
+  app.replaceChildren(page);
+}
 const params=new URLSearchParams(location.search);
 (params.has('review')?openReview(params.get('review'),params.get('snapshot'),params.has('repo')&&params.has('file')?{repo:params.get('repo'),path:params.get('file')}:null):home()).catch(error=>{app.replaceChildren(el('div','error',error.message));});

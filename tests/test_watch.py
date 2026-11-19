@@ -94,22 +94,27 @@ class WatchTests(unittest.TestCase):
         review_watch.activity(review.api,self.state,'code',[tid]);self.api('/api/reviews/demo/watch',{'action':'stop'})
         self.assertEqual(view()['activity'],'idle')
 
-    def test_keep_deletes_review_and_stops_watcher(self):
-        self.comment();self.start()
+    def test_keep_archives_then_delete_removes(self):
+        tid=self.comment();self.start()
         with server.session() as db: db.execute('INSERT INTO viewed VALUES(?,?,?)',(self.sid,'app','a.py'))
-        self.assertEqual(self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid}),{'status':'removed'})
-        self.assertEqual(self.poll()['status'],'kept')
-        self.assertEqual(self.api('/api/reviews'),[])
-        with self.assertRaises(Exception):self.api('/api/reviews/demo')
-        with self.assertRaises(Exception):self.start()
+        with self.assertRaises(ValueError):review.api(self.url,'/api/reviews/demo',{},'DELETE')
+        result=self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
+        self.assertEqual(result['status'],'kept');self.assertEqual(result,self.api('/api/reviews/demo/decision',{'action':'keep'}))
+        self.assertEqual(self.poll()['status'],'kept');self.assertFalse(self.api('/api/reviews/demo/watch')['watcher']['active'])
+        self.assertEqual(self.api('/api/reviews')[0]['decision']['status'],'kept')
+        with self.assertRaises(ValueError):self.comment()
+        with self.assertRaises(ValueError):self.api('/api/threads/'+tid+'/messages',{'author':'Reviewer','body':'Late'})
+        self.assertEqual(review.api(self.url,'/api/reviews/demo',{},'DELETE'),{'status':'deleted'})
+        self.assertEqual(self.api('/api/reviews'),[]);self.assertEqual(self.poll()['status'],'kept')
         with server.session() as db:
             for table in ['snapshots','threads','messages','viewed','review_watchers','review_decisions']:
                 self.assertEqual(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0,table)
         self.payload['description']='new task';self.assertIn('snapshot',self.api('/api/reviews',self.payload))
 
-    def test_keep_blocked_while_ship_in_flight(self):
+    def test_keep_and_delete_blocked_while_ship_in_flight(self):
         self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
         with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
+        with self.assertRaises(ValueError):review.api(self.url,'/api/reviews/demo',{},'DELETE')
         self.assertEqual(self.api('/api/reviews/demo')['decision']['status'],'requested')
 
     def test_stale_snapshot_cannot_close_or_ship(self):

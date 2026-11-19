@@ -20,7 +20,7 @@
       state.watcher=w;paintActivity();
       state.review.decision=result.decision;
       for(const button of document.querySelectorAll('.review-ship'))button.disabled=!!result.decision;
-      for(const button of document.querySelectorAll('.review-keep'))button.disabled=['requested','preparing'].includes(result.decision?.status);
+      for(const button of document.querySelectorAll('.review-keep'))button.disabled=!!result.decision;
       for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
       let feedback;
       if(result.watcher){
@@ -53,10 +53,9 @@
   globalThis.PreprLive={refresh:()=>setTimeout(refresh,0),decide:async action=>{
     if(!canNavigate())return;
     const rid=state.review.id;
-    if(action==='keep'&&!confirm('Keep local changes and delete this review with its comments?'))return;
     await api('/api/reviews/'+rid+'/decision',{action,snapshot:state.review.snapshot});
-    // Keep deletes review; back to list.
-    if(action==='keep'){lastCheck=0;watchedReview=null;indicator(false,'Not watching','No review open');state.review=null;history.replaceState(null,'','/');await home();toast('Review kept locally and removed');return;}
+    // Keep archives review; show Completed tab.
+    if(action==='keep'){lastCheck=0;watchedReview=null;indicator(false,'Not watching','No review open');state.review=null;history.replaceState(null,'','/?tab=completed');await home('completed');toast('Review kept · moved to Completed');return;}
     await refresh();
   }};
   setInterval(()=>{if(lastCheck&&Date.now()-lastCheck>10000)indicator(false,'Status unavailable','Working-agent status is out of date');refresh();},2000);refresh();

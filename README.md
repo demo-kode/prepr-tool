@@ -44,9 +44,13 @@ ln -s "$(pwd)/skills/prepr-review" ~/.codex/skills/prepr-review    # Codex
    **Open updated diff** loads new snapshot. Earlier threads stay visible on new code and in
    **Discussion**.
 5. Finish, top right:
-   - **Keep**: keep local changes, stop watching, delete review.
+   - **Keep**: keep local changes, stop watching, move review to **Completed** (read-only).
    - **Ship it**: agent pushes PR branches, opens real PRs (one per affected repo) for exact
-     snapshot shown. Never merges or deploys.
+     snapshot shown. Never merges or deploys. Done: review moves to **Completed** with green
+     **PR submitted** token.
+
+Home page: **Active** and **Completed** tabs. Completed reviews stay archived until you delete
+them (trash icon).
 
 Watching needs agent session alive. Session ended? Ask same agent to resume.
 No live watch also works: tell agent to read feedback when done commenting.

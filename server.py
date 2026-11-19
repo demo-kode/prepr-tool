@@ -249,6 +249,9 @@ class Handler(BaseHTTPRequestHandler):
             live_review.require_open(db,row['review_id'])
             db.execute('UPDATE messages SET deleted=1 WHERE id=?',(message_match[1],))
             return {'ok':True}
+        delete_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)', path)
+        if delete_match and method == 'DELETE':
+            return live_review.delete_review(db, delete_match[1])
         decision_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/decision', path)
         if decision_match and method == 'POST':
             return live_review.decide(db,decision_match[1],data)
