@@ -71,6 +71,15 @@ class WatchTests(unittest.TestCase):
         result=review_watch.wait(review.api,self.state,timeout=1,interval=.05);timer.join()
         self.assertEqual(result['status'],'comments')
 
+    def test_viewed_carries_to_unchanged_files(self):
+        self.payload['repos'][0]['files'].append({'path':'b.py','status':'M','old':'x\n','new':'y\n'})
+        sid=self.api('/api/reviews',self.payload)['snapshot']
+        for path in ['a.py','b.py']:self.api(f'/api/snapshots/{sid}/viewed',{'repo':'app','path':path,'viewed':True})
+        self.payload['repos'][0]['files'][1]['new']='z\n'
+        new=self.api('/api/reviews',self.payload)['snapshot']
+        self.assertEqual(self.api('/api/reviews/demo?snapshot='+str(new))['viewed'],[{'repo':'app','path':'a.py'}])
+        self.assertEqual(len(self.api('/api/reviews/demo?snapshot='+str(sid))['viewed']),2)
+
     def test_agent_activity_follows_batch(self):
         tid=self.comment();self.start()
         view=lambda:self.api('/api/reviews/demo/watch')['watcher']

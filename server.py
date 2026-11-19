@@ -158,7 +158,23 @@ def publish(db, data):
                (data['id'], data['title'], data.get('description', ''), stamp))
     sid = db.execute('INSERT INTO snapshots(review_id,fingerprint,created,payload) VALUES(?,?,?,?)',
                      (data['id'], fingerprint, stamp, payload)).lastrowid
+    if last:
+        carry_viewed(db, last['id'], sid, data)
     return {'review': data['id'], 'snapshot': sid, 'unchanged': False}
+
+
+def file_signature(f):
+    return [f.get(k) for k in ('status', 'oldRepo', 'oldPath', 'old', 'new', 'oldMode', 'newMode', 'oldHash', 'newHash', 'movedTo')]
+
+
+def carry_viewed(db, previous, sid, data):
+    # Viewed carries forward only for byte-identical file entries.
+    before = {(r['name'], f['path']): file_signature(f) for r in snapshot(db, previous)[1]['repos'] for f in r['files']}
+    after = {(r['name'], f['path']): file_signature(f) for r in data['repos'] for f in r['files']}
+    for row in db.execute('SELECT repo,path FROM viewed WHERE snapshot_id=?', (previous,)).fetchall():
+        k = (row['repo'], row['path'])
+        if k in after and after[k] == before.get(k):
+            db.execute('INSERT OR IGNORE INTO viewed VALUES(?,?,?)', (sid, row['repo'], row['path']))
 
 
 class Handler(BaseHTTPRequestHandler):

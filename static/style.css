@@ -71,3 +71,6 @@
 .thread.resolved{border-left-color:#56846a;background:#222833}.thread.collapsed{padding:6px 16px}
 .thread .thread-reply,.thread .composer textarea{background:#1c212c}.thread .message-body{color:#e8ebf0}
 .discussion .thread{margin-top:10px}
+
+.thread-row td{background:var(--bg);padding:6px 12px}.file-discussion{background:var(--bg);padding:2px 12px}
+.thread{border:2px solid #6a5fb0;border-left-width:4px;margin:4px 0}.thread.resolved{border-color:#4f8a66}
