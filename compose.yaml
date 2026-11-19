@@ -1,0 +1,19 @@
+name: prepr
+services:
+  review:
+    build: .
+    ports:
+      - "127.0.0.1:18744:8080"
+    volumes:
+      - ./.local/data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
