@@ -69,7 +69,7 @@ async function openReview(id, snapshot, selection) {
     state.selected=r?{repo:r.name,path:(r.files.find(shown)||r.files[0]).path}:null;
   }
   setLocation(); renderShell();
-  if(state.tab==='files') await loadFile(); else renderDiscussion();
+  if(state.tab==='files') await loadFile(); else renderOther();
 }
 async function refresh() { if(!canNavigate())return; await openReview(state.review.id,state.review.snapshot); toast('Comments refreshed'); }
 function renderShell() {
@@ -86,9 +86,10 @@ function renderShell() {
   if(r.description)header.append(el('p','description',r.description));
   const stats=el('div','meta-line');const add=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.added,0),0), del=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.removed,0),0);
   stats.append(el('span','pill purple','Local review'),el('span','',`${r.repos.length} repositories`),el('span','',`${totalFiles()} changed files`),el('span','plus',`+${add.toLocaleString()}`),el('span','minus',`−${del.toLocaleString()}`));header.append(stats);
-  const tabs=el('nav','tabs');const open=r.threads.filter(t=>t.status==='open').length;
-  for(const [id,label,count] of [['files','Files',totalFiles()],['discussion','Discussion',open]]) {
-    const b=btn(label,()=>{if(!canNavigate())return;state.tab=id;renderShell();return id==='files'?loadFile():renderDiscussion();},'tab'+(state.tab===id?' active':''));b.append(el('span','count',String(count))); tabs.append(b);
+  const tabs=el('nav','tabs');const open=r.threads.length;
+  const commits=r.repos.reduce((n,repo)=>n+(repo.commits?.length||0),0);
+  for(const [id,label,count] of [['files','Files',totalFiles()],['commits','Commits',commits],['discussion','Discussion',open]]) {
+    const b=btn(label,()=>{if(!canNavigate())return;state.tab=id;renderShell();return id==='files'?loadFile():renderOther();},'tab'+(state.tab===id?' active':''));b.append(el('span','count',String(count))); tabs.append(b);
   }
   tabs.append(el('span','progress',`${r.viewed.length} / ${totalFiles()} files viewed`));header.append(tabs);app.append(header);
   if(r.snapshot!==r.snapshots[0].id) {const banner=el('div','banner','You’re viewing an earlier snapshot. Comments stay attached to this version.');banner.append(btn('Open latest',()=>{if(canNavigate())return openReview(r.id);}));app.append(banner);}
@@ -98,7 +99,7 @@ function renderShell() {
     const divider=resizeHandle('Resize file list',()=>width,value=>{width=value;workspace.style.setProperty('--sidebar-width',`${value}px`);localStorage.setItem('prepr-sidebar-width',value);},()=>[180,Math.min(600,window.innerWidth*.6)],x=>x-workspace.getBoundingClientRect().left,280);
     divider.classList.add('sidebar-divider');workspace.append(el('aside','sidebar'),divider,el('section','main-panel'));app.append(workspace);renderSidebar();
     requestAnimationFrame(()=>{document.documentElement.style.setProperty('--header-height',`${workspace.getBoundingClientRect().top}px`);});
-  } else app.append(el('section','discussion'));
+  } else app.append(el('section',state.tab==='commits'?'commits-page':'discussion'));
 }
 function renderSidebar() {
   const side=document.querySelector('.sidebar');if(!side)return;side.replaceChildren();
@@ -125,14 +126,41 @@ function renderSidebar() {
       list.append(details);
     }
     if(!list.children.length)list.append(el('p','muted','No matching files.'));};
+  // Up/Down move selection through visible files; Down from search enters list.
+  const step=(from,delta)=>{const items=[...list.querySelectorAll('.file-nav')].filter(n=>n.offsetParent);if(!items.length)return;
+    const index=items.indexOf(from),next=items[index<0?(delta>0?0:items.length-1):Math.min(items.length-1,Math.max(0,index+delta))];
+    if(next===from)return;next.focus();next.scrollIntoView({block:'nearest'});next.click();};
+  // Right/Left mark focused file viewed/unviewed.
+  // WASD mirror arrows.
+  const keys={ArrowUp:'up',w:'up',ArrowDown:'down',s:'down',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right'};
+  list.addEventListener('keydown',e=>{if(!e.target.matches('.file-nav')||e.ctrlKey||e.metaKey||e.altKey)return;
+    const move=keys[e.key.length===1?e.key.toLowerCase():e.key];if(!move)return;e.preventDefault();
+    if(move==='up'||move==='down'){step(e.target,move==='down'?1:-1);return;}
+    const [repo,path]=e.target.dataset.key.split('\0'),value=move==='right';if(viewed(repo,path)!==value)setViewed(repo,path,value).catch(error=>toast(error.message));});
+  search.addEventListener('keydown',e=>{if(e.key!=='ArrowDown')return;e.preventDefault();const active=list.querySelector('.file-nav.active');if(active&&active.offsetParent)active.focus();else step(null,1);});
   search.addEventListener('input',()=>{state.query=search.value;paint();});paint();
   side.addEventListener('scroll',()=>{state.sidebarScroll=side.scrollTop;});
   if(state.sidebarScroll!==null)side.scrollTop=state.sidebarScroll;else side.querySelector('.file-nav.active')?.scrollIntoView({block:'nearest'});
 }
+// Marks: + added, * changed, +m/*m moved, +c/*c copied (* = edited), removed = struck name.
+function statusMark(f) {
+  const from=f.oldRepo?`${f.oldRepo}/${f.oldPath}`:f.oldPath,edit=f.added||f.removed?'*':'+',edited=f.added||f.removed?' with changes':'';
+  const [mark,label]={A:['+','Added'],D:['',f.movedTo?`Moved to ${f.movedTo.repo}/${f.movedTo.path}`:'Deleted'],R:[edit+'m',`Moved from ${from}${edited}`],C:[edit+'c',`Copied from ${from}${edited}`]}[f.status]||['*','Changed'];
+  const node=el('span',`file-status ${f.status}`,mark);node.title=label;node.setAttribute('aria-label',label);return node;
+}
+// Update viewed in place; keeps list focus and scroll.
+async function setViewed(repo,path,value) {
+  await api(`/api/snapshots/${state.review.snapshot}/viewed`,{repo,path,viewed:value});
+  state.review.viewed=state.review.viewed.filter(v=>v.repo!==repo||v.path!==path);if(value)state.review.viewed.push({repo,path});
+  const node=[...document.querySelectorAll('.file-nav')].find(n=>n.dataset.key===key(repo,path));
+  if(node){node.querySelector('.view-tick')?.remove();if(value)node.append(el('span','view-tick','✓'));}
+  const progress=document.querySelector('.progress');if(progress)progress.textContent=`${state.review.viewed.length} / ${totalFiles()} files viewed`;
+  const box=document.querySelector('.viewed-toggle');if(box&&isSelected(repo,path))box.checked=value;
+}
 function isSelected(repo,path) { return !!state.selected&&key(repo,path)===key(state.selected.repo,state.selected.path); }
 function fileButton(r,f,nested) {
-  const b=btn('',()=>selectFile({repo:r.name,path:f.path}),'file-nav'+(nested?' nested':'')+(isSelected(r.name,f.path)?' active':''));b.title=`${r.name}/${f.path}`;b.dataset.key=key(r.name,f.path);
-  b.append(el('span',`file-status ${f.status}`,f.status),el('span','file-label',f.path.split('/').pop()));
+  const b=btn('',()=>selectFile({repo:r.name,path:f.path}),'file-nav'+(nested?' nested':'')+(f.status==='D'?' deleted':'')+(isSelected(r.name,f.path)?' active':''));b.title=`${r.name}/${f.path}`;b.dataset.key=key(r.name,f.path);
+  b.append(statusMark(f),el('span','file-label',f.path.split('/').pop()));
   const count=fileThreads(r.name,f.path,f.status).filter(t=>t.status==='open').length;if(count)b.append(el('span','file-comment-count',`${count} ◦`));
   if(viewed(r.name,f.path))b.append(el('span','view-tick','✓'));return b;
 }
@@ -154,17 +182,18 @@ async function loadFile() {
 }
 function renderFile() {
   const panel=document.querySelector('.main-panel');panel.replaceChildren();const {repo,path}=state.selected,f=state.file;
-  const head=el('div','file-header');head.append(el('span',`file-status ${f.status}`,f.status),el('span','file-repo',repo),el('span','file-path',path));
+  const head=el('div','file-header');head.append(statusMark(f),el('span','file-repo',repo),el('span','file-path',path));
+  // Origin inline after path, replaces comparison bar.
+  const origin=el('span','file-origin');head.append(origin);
+  if(['R','C'].includes(f.status)||f.oldRepo){const from=f.oldRepo?`${f.oldRepo}/${f.oldPath}`:f.oldPath;origin.textContent=`${f.status==='C'?'copied':'moved'} from ${from}`;if(f.oldBase)origin.title=`Compared with ${from} @ ${f.oldBase.slice(0,8)}`;}
+  if(f.movedTo){origin.append(document.createTextNode('moved to '),btn(`${f.movedTo.repo}/${f.movedTo.path}`,()=>selectFile(f.movedTo),'origin-link'));}
   const stats=el('span','stats');stats.append(el('span','plus',`+${f.added}`),el('span','minus',`−${f.removed}`));head.append(stats);
-  const actions=el('div','file-actions');const label=el('label'),checkbox=el('input');checkbox.type='checkbox';checkbox.checked=viewed(repo,path);checkbox.addEventListener('change',async()=>{try{await api(`/api/snapshots/${state.review.snapshot}/viewed`,{repo,path,viewed:checkbox.checked});state.review.viewed=state.review.viewed.filter(v=>v.repo!==repo||v.path!==path);if(checkbox.checked)state.review.viewed.push({repo,path});renderSidebar();document.querySelector('.progress').textContent=`${state.review.viewed.length} / ${totalFiles()} files viewed`;}catch(e){checkbox.checked=!checkbox.checked;toast(e.message);}});label.append(checkbox,document.createTextNode('Viewed'));actions.append(label);
+  const actions=el('div','file-actions');const label=el('label'),checkbox=el('input','viewed-toggle');checkbox.type='checkbox';checkbox.checked=viewed(repo,path);checkbox.addEventListener('change',()=>setViewed(repo,path,checkbox.checked).catch(e=>{checkbox.checked=!checkbox.checked;toast(e.message);}));label.append(checkbox,document.createTextNode('Viewed'));actions.append(label);
   actions.append(btn('Comment on file',startFileComment,'review-edit'));
   const views=el('div','view-switch');views.setAttribute('role','group');views.setAttribute('aria-label','Code view');
   for(const view of ['split','unified','raw']){const button=iconBtn(view[0].toUpperCase()+view.slice(1),view,()=>{if(!canNavigate())return;state.view=view;localStorage.setItem('prepr-view',view);renderFile();});button.setAttribute('aria-pressed',state.view===view?'true':'false');views.append(button);}
   actions.append(views);head.append(actions);panel.append(head);
-  const r=state.review.repos.find(r=>r.name===repo);panel.append(el('div','branch-line',`${r.branch}  ·  ${r.base.slice(0,8)} → working tree at ${r.head.slice(0,8)}`));
-  if(f.oldRepo)panel.append(el('div','move-note',`Git comparison: ${f.oldRepo}/${f.oldPath} @ ${f.oldBase.slice(0,8)} → ${repo}/${path}`));
-  else if(f.status==='R')panel.append(el('div','file-note',`Renamed from ${f.oldPath}`));
-  if(f.movedTo){const note=el('div','move-note',`Moved to ${f.movedTo.repo}/${f.movedTo.path}`);note.append(btn('Review moved file',()=>selectFile(f.movedTo)));panel.append(note);}
+  
   panel.append(el('section','file-discussion'));
   if(f.oldMode!==f.newMode && f.oldMode && f.newMode)panel.append(el('div','file-note',`Mode: ${f.oldMode} → ${f.newMode}`));
   if(f.note)panel.append(el('div','file-note',f.note));
@@ -227,7 +256,7 @@ function renderFile() {
     }
   }
   if(state.view!=='raw' && !f.blocks.length && !f.note)panel.append(el('div','file-note',f.movedTo?'Review the destination comparison for content changes.':f.old===f.new?'No text changes. File moved or permissions changed.':'Line-ending or final-newline change.'));
-  const syntaxStatus=el('span','syntax-status');syntaxStatus.setAttribute('role','status');panel.querySelector('.branch-line').append(syntaxStatus);PreprHighlight.apply(table,f,'auto',syntaxStatus);
+  const syntaxStatus=el('span','syntax-status');syntaxStatus.setAttribute('role','status');syntaxStatus.classList.add('sr-only');head.append(syntaxStatus);PreprHighlight.apply(table,f,'auto',syntaxStatus);
   const hidden=threads.filter(t=>!placed.has(t.id));if(hidden.length){const section=el('div','discussion');section.append(el('h2','','Comments outside this view'));for(const t of hidden){section.append(el('pre','anchor-code',`${t.side}:${t.line}  ${t.code}`),renderThread(t));}panel.append(section);}
 }
 function composer(onSave,onCancel,label='Add a comment') {
@@ -250,12 +279,40 @@ function startComment(row,side,line) {
   const tr=el('tr','thread-row new-comment-row'),cell=el('td');cell.colSpan=row.children.length;const anchor={snapshot:state.review.snapshot,...state.selected,side,line};
   cell.append(composer(async body=>{await api('/api/threads',{...anchor,author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Comment saved');},()=>tr.remove(),`Comment on ${side==='old'?'before':'after'} line ${line}`));tr.append(cell);row.after(tr);
 }
-async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderDiscussion();}
+async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderOther();}
 function renderThread(t){
   const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');const anchor=t.origin||t;top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',anchor.side==='file'?'File comment':`${anchor.side==='old'?'Before':'After'} line ${anchor.line}`));
   if(t.carried)top.append(el('small','carried-note',`Snapshot ${snapshotNumber(t.snapshot_id)}${t.changed?' · code changed since':''}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
   for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('span','avatar',m.author.slice(0,2).toUpperCase()),el('strong','',m.author),el('time','',time(m.created)),iconBtn('Delete comment','trash',async()=>{if(!canNavigate())return;await api('/api/messages/'+m.id,{},'DELETE');await reloadThreads();toast('Comment deleted');},'delete-comment review-edit'));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
   const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply review-edit');thread.append(reply);return thread;
+}
+function renderOther(){return state.tab==='commits'?renderCommits():renderDiscussion();}
+function statSpan(added,removed){const n=el('span','stats');n.append(el('span','plus',`+${added}`),el('span','minus',`−${removed}`));return n;}
+function openFromCommit(repo,path){if(!canNavigate())return;state.tab='files';state.selected={repo,path};state.sidebarScroll=null;setLocation();renderShell();return loadFile();}
+// Commits per repo, base..HEAD, captured at publish.
+function renderCommits(){
+  const panel=document.querySelector('.commits-page');panel.replaceChildren();
+  for(const r of state.review.repos){
+    const section=el('section','commit-repo'),head=el('div','commit-repo-head');
+    head.append(el('h2','',r.name),el('span','muted',`${r.branch} · ${r.base.slice(0,8)} → ${r.head.slice(0,8)}`));section.append(head);
+    if(!r.commits){section.append(el('p','muted','Commits not captured in this snapshot. Republish to include them.'));panel.append(section);continue;}
+    if(!r.commits.length)section.append(el('p','muted','No commits since base; changes are uncommitted.'));
+    for(const c of r.commits){
+      const item=el('details','commit'),summary=el('summary');
+      summary.append(el('code','commit-sha',c.sha.slice(0,8)),el('span','commit-subject',c.subject),el('span','muted commit-meta',`${c.author} · ${time(c.date)}`),statSpan(c.files.reduce((n,f)=>n+f.added,0),c.files.reduce((n,f)=>n+f.removed,0)));
+      const body=el('div','commit-body');if(c.body)body.append(el('p','commit-message',c.body));
+      body.append(el('div','muted commit-full',`${c.sha}${c.merge?' · merge, first-parent diff':''}`));
+      for(const f of c.files){
+        const inReview=r.files.some(x=>x.path===f.path),row=btn('',()=>openFromCommit(r.name,f.path),'commit-file'+(f.status==='D'?' deleted':''));
+        row.disabled=!inReview;row.title=inReview?`Open ${f.path} in Files`:'Not in this review snapshot';
+        row.append(statusMark(f),el('span','file-label',f.oldPath&&f.oldPath!==f.path?`${f.oldPath} → ${f.path}`:f.path),statSpan(f.added,f.removed));body.append(row);
+      }
+      if(c.hiddenFiles)body.append(el('p','muted commit-hidden',`${c.hiddenFiles} file${c.hiddenFiles>1?'s':''} outside review scope`));
+      item.append(summary,body);section.append(item);
+    }
+    if(r.commitsTruncated)section.append(el('p','muted','Showing latest 200 commits.'));
+    panel.append(section);
+  }
 }
 function renderDiscussion(){const panel=document.querySelector('.discussion');panel.replaceChildren();const tools=el('div','discussion-tools');tools.append(el('h2','','Review discussion'));const filter=el('select');filter.setAttribute('aria-label','Filter discussion');for(const [value,label] of [['open','Open threads'],['all','All threads'],['resolved','Resolved threads']]){const o=el('option','',label);o.value=value;filter.append(o);}filter.value=state.threadFilter;filter.addEventListener('change',()=>{if(!canNavigate()){filter.value=state.threadFilter;return;}state.threadFilter=filter.value;renderDiscussion();});tools.append(filter);panel.append(tools);
  const list=state.review.threads.filter(t=>state.threadFilter==='all'||t.status===state.threadFilter);

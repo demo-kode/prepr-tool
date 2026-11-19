@@ -124,6 +124,8 @@ def validate_payload(data):
             required_text(r, key, 2000)
         if not isinstance(r.get('files'), list):
             raise ValueError('Missing files')
+        if not isinstance(r.get('commits', []), list):
+            raise ValueError('Commits must be a list')
         paths = set()
         for f in r['files']:
             path = required_text(f, 'path', 4000)

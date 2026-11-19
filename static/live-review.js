@@ -29,7 +29,7 @@
            (state.tab!=='files'||state.file)&&JSON.stringify(feedback.threads)!==JSON.stringify(state.review.threads)){
           const panel=document.querySelector('.main-panel'),top=panel?.scrollTop,left=panel?.scrollLeft;
           state.review.threads=feedback.threads;renderShell();
-          if(state.tab==='files'){renderFile();const next=document.querySelector('.main-panel');next.scrollTop=top||0;next.scrollLeft=left||0;}else renderDiscussion();
+          if(state.tab==='files'){renderFile();const next=document.querySelector('.main-panel');next.scrollTop=top||0;next.scrollLeft=left||0;}else renderOther();
           return;
         }
       }

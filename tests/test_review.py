@@ -56,6 +56,20 @@ class ReviewTests(unittest.TestCase):
         first=self.api('/api/reviews',payload);again=self.api('/api/reviews',payload)
         self.assertTrue(again['unchanged']);self.assertEqual(first['snapshot'],again['snapshot'])
 
+    def test_commits_listed_with_scoped_files_and_no_email(self):
+        (self.repo/'a.txt').write_text('one\nTWO\nthree\n');(self.repo/'secret.log').write_text('x\n')
+        self.git('add','.');self.git('commit','-qm','first change\n\nWhy it changed.')
+        self.git('mv','rename.txt','moved.txt');self.git('commit','-qm','move file')
+        (self.repo/'a.txt').write_text('uncommitted\n')
+        repo=review.capture_repository({'name':'repo','path':str(self.repo),'base':self.base,'exclude':['*.log']})
+        first,second=repo['commits'][1],repo['commits'][0]
+        self.assertEqual([second['subject'],first['subject']],['move file','first change'])
+        self.assertEqual(first['body'],'Why it changed.');self.assertEqual(first['author'],'Test')
+        self.assertEqual(first['files'],[{'path':'a.txt','oldPath':'a.txt','status':'M','added':1,'removed':1}]);self.assertEqual(first['hiddenFiles'],1)
+        self.assertEqual(second['files'][0]['status'],'R');self.assertEqual(second['files'][0]['path'],'moved.txt')
+        self.assertFalse(repo['commitsTruncated']);self.assertNotIn('example.invalid',json.dumps(repo['commits']))
+        with self.assertRaises(ValueError):self.api('/api/reviews',{**self.payload(),'repos':[{**repo,'commits':'bad'}]})
+
     def test_feedback_survives_new_snapshot_and_database_reopen(self):
         (self.repo/'a.txt').write_text('one\nchanged\nthree\n');sid=self.api('/api/reviews',self.payload())['snapshot']
         tid=self.api('/api/threads',{'snapshot':sid,'repo':'repo','path':'a.txt','side':'new','line':2,'author':'Reviewer','body':'Why this change?'})['id']

@@ -40,3 +40,18 @@
 .file-nav{align-items:center;gap:6px;padding:1px 6px 1px 22px;margin:0;line-height:22px;border-radius:4px}.file-nav.nested{padding-left:32px}
 .file-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}.file-nav .file-status{margin:0;flex:0 0 9px;font-size:10px}
 .carried-note{color:var(--muted);font-size:11px}.thread .anchor-code{margin:0 0 8px}
+
+.file-nav .file-status{flex:0 0 14px;text-align:center;font-weight:700}.file-header .file-status{font-weight:700}
+.file-nav.deleted .file-label{text-decoration:line-through;color:var(--muted);opacity:.6}.file-header .file-status.D:empty{display:none}
+
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.commits-page{padding:20px 28px;max-width:1100px}.commit-repo{margin-bottom:28px}.commit-repo-head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}.commit-repo-head span{font:12px ui-monospace,monospace}
+.commit{border-top:1px solid var(--border)}.commit>summary{list-style:none;cursor:pointer;display:flex;gap:12px;align-items:center;padding:7px 6px}.commit>summary::-webkit-details-marker{display:none}.commit>summary:hover{background:var(--subtle)}
+.commit-sha{font:12px ui-monospace,monospace;color:var(--accent)}.commit-subject{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}.commit-meta{font-size:12px;white-space:nowrap}
+.commit-body{padding:2px 6px 14px 82px}.commit-message{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:8px}.commit-full{font:11px ui-monospace,monospace;margin-bottom:6px;overflow-wrap:anywhere}
+.commit-file{display:flex;gap:8px;align-items:center;width:100%;border:0;background:none;padding:2px 6px;text-align:left;font:12px ui-monospace,monospace;border-radius:4px}.commit-file:hover:not(:disabled){background:#252c39}.commit-file:disabled{cursor:default;opacity:.7}
+.commit-file .file-label{flex:1;min-width:0;overflow-wrap:anywhere}.commit-file .file-status{flex:0 0 14px;text-align:center;font-weight:700}.commit-file.deleted .file-label{text-decoration:line-through;color:var(--muted)}.commit-hidden{font-size:12px;margin-top:4px}
+@media(max-width:620px){.commits-page{padding:16px}.commit-meta{display:none}.commit-body{padding-left:6px}}
+
+.file-header .file-path{flex:0 1 auto}.file-origin{flex:1;min-width:0;font:12px ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}
+.origin-link{border:0;background:none;padding:0;font:inherit;color:var(--accent)}.origin-link:hover{background:none;text-decoration:underline}

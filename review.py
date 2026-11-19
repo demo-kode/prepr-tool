@@ -166,6 +166,64 @@ def working_bytes(repo, path):
     return target.read_bytes(), 'file', '100755' if mode & stat.S_IXUSR else '100644'
 
 
+EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+COMMIT_LIMIT = 200
+
+
+def in_scope(spec, path, old_path=''):
+    if spec.get('include') and not any(fnmatch.fnmatchcase(path, p) or fnmatch.fnmatchcase(old_path, p) for p in spec['include']):
+        return False
+    return not any(fnmatch.fnmatchcase(path, p) for p in spec.get('exclude', []))
+
+
+def name_status(raw):
+    # -z name-status: STATUS\0path\0 or R/C: STATUS\0old\0new\0.
+    fields, pos, result = raw.split(b'\0'), 0, []
+    while pos < len(fields) and fields[pos]:
+        status = fields[pos].decode()[0]
+        old_path = fields[pos+1].decode(); pos += 2
+        path = old_path
+        if status in ('R', 'C'):
+            path = fields[pos].decode(); pos += 1
+        result.append((status, old_path, path))
+    return result
+
+
+def numstat(raw):
+    # -z numstat: A\tR\tpath\0 or renames A\tR\t\0old\0new\0; binary uses '-'.
+    fields, pos, result = raw.split(b'\0'), 0, {}
+    while pos < len(fields) and fields[pos]:
+        added, removed, path = fields[pos].decode().split('\t', 2); pos += 1
+        if not path:
+            path = fields[pos+1].decode(); pos += 2
+        result[path] = (int(added) if added != '-' else 0, int(removed) if removed != '-' else 0)
+    return result
+
+
+def capture_commits(repo, base, head, spec):
+    # Commits base..head; files limited to review scope. Name only, no email.
+    raw = git(repo, 'log', f'--max-count={COMMIT_LIMIT+1}', '--format=%H%x1f%P%x1f%an%x1f%aI%x1f%B%x1e', f'{base}..{head}')
+    commits = []
+    for record in raw.decode('utf-8', 'replace').split('\x1e'):
+        record = record.strip('\n')
+        if not record:
+            continue
+        sha, parents, author, date, message = record.split('\x1f', 4)
+        parent = (parents.split() or [EMPTY_TREE])[0]
+        stats = numstat(git(repo, 'diff', '--no-ext-diff', '--no-textconv', '-z', '-M', '--numstat', parent, sha))
+        files, hidden = [], 0
+        for status, old_path, path in name_status(git(repo, 'diff', '--no-ext-diff', '-z', '-M', '--name-status', parent, sha)):
+            if not in_scope(spec, path, old_path):
+                hidden += 1
+                continue
+            added, removed = stats.get(path, (0, 0))
+            files.append({'path':path, 'oldPath':old_path, 'status':status, 'added':added, 'removed':removed})
+        subject, _, body = message.strip().partition('\n')
+        commits.append({'sha':sha, 'author':author, 'date':date, 'subject':subject, 'body':body.strip(),
+                        'merge':len(parents.split()) > 1, 'files':files, 'hiddenFiles':hidden})
+    return commits[:COMMIT_LIMIT], len(commits) > COMMIT_LIMIT
+
+
 def capture_repository(spec):
     repo = Path(spec['path']).expanduser().resolve()
     root = Path(git(repo, 'rev-parse', '--show-toplevel').decode().strip()).resolve()
@@ -177,16 +235,7 @@ def capture_repository(spec):
     branch = git(repo, 'branch', '--show-current').decode().strip() or '(detached)'
     if spec.get('branch') and branch != spec['branch']:
         raise ValueError(f'{spec["name"]}: expected branch {spec["branch"]}, found {branch}')
-    fields = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--').split(b'\0')
-    changed = []
-    pos = 0
-    while pos < len(fields) and fields[pos]:
-        status = fields[pos].decode()[0]
-        old_path = fields[pos+1].decode(); pos += 2
-        path = old_path
-        if status in ('R', 'C'):
-            path = fields[pos].decode(); pos += 1
-        changed.append((status, old_path, path))
+    changed = name_status(git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'))
     changed += [('A', '', p.decode()) for p in git(repo, 'ls-files', '--others', '--exclude-standard', '-z').split(b'\0') if p]
     tree = {}
     for item in git(repo, 'ls-tree', '-r', '-z', base).split(b'\0'):
@@ -196,9 +245,7 @@ def capture_repository(spec):
             tree[name.decode()] = (mode, kind, oid)
     files = []
     for status, old_path, path in sorted(changed, key=lambda x: x[2]):
-        if spec.get('include') and not any(fnmatch.fnmatchcase(path, pattern) or fnmatch.fnmatchcase(old_path, pattern) for pattern in spec['include']):
-            continue
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in spec.get('exclude', [])):
+        if not in_scope(spec, path, old_path):
             continue
         if status not in ('A','M','D','R','T'):
             raise ValueError(f'Unsupported Git status {status} for {path}; resolve conflicts first')
@@ -215,10 +262,12 @@ def capture_repository(spec):
         files.append({'path':path, 'oldPath':old_path or path, 'status':status, 'old':old, 'new':new,
                       'oldHash':old_hash, 'newHash':new_hash, 'oldMode':old_mode, 'newMode':new_mode,
                       'note':old_note or new_note, 'added':added, 'removed':removed})
+    commits, truncated = capture_commits(repo, base, head, spec)
     if git(repo, 'rev-parse', 'HEAD').decode().strip() != head:
         raise ValueError(f'{repo}: HEAD moved during capture; publish again')
     return {'name':spec['name'], 'source':str(repo), 'base':base, 'baseRef':base_ref, 'head':head,
-            'branch':branch, 'files':files, 'include':spec.get('include', []), 'exclude':spec.get('exclude', [])}
+            'branch':branch, 'files':files, 'include':spec.get('include', []), 'exclude':spec.get('exclude', []),
+            'commits':commits, 'commitsTruncated':truncated}
 
 
 def api(url, path, data=None, method=None):
