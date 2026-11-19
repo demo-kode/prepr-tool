@@ -20,6 +20,18 @@ def require_open(db, rid):
     if decision(db, rid): raise ValueError('Local review is closed; preserve its approved snapshot and use a new review for further changes')
 
 
+def remove(db, rid):
+    # Keep = drop review, snapshots, comments, watcher.
+    snaps = 'SELECT id FROM snapshots WHERE review_id=?'
+    db.execute(f'DELETE FROM messages WHERE thread_id IN (SELECT id FROM threads WHERE snapshot_id IN ({snaps}))', (rid,))
+    for table in ('threads', 'viewed'): db.execute(f'DELETE FROM {table} WHERE snapshot_id IN ({snaps})', (rid,))
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in ('review_decisions', 'review_watchers', 'agent_jobs'):
+        if table in tables: db.execute(f'DELETE FROM {table} WHERE review_id=?', (rid,))
+    db.execute('DELETE FROM snapshots WHERE review_id=?', (rid,))
+    db.execute('DELETE FROM reviews WHERE id=?', (rid,))
+
+
 def decide(db, rid, data):
     # Serialize decisions with ownership and publication.
     db.execute('UPDATE reviews SET updated=updated WHERE id=?', (rid,))
@@ -27,13 +39,18 @@ def decide(db, rid, data):
     if latest is None: raise LookupError('Review not found')
     existing = decision(db, rid)
     action = data.get('action')
-    if action in ('keep', 'ship'):
+    if action == 'keep':
+        # Ship in flight: agent owns it.
+        if existing and existing['status'] in ('requested','preparing'): raise ValueError('Ship it in progress')
+        remove(db, rid)
+        return {'status':'removed'}
+    if action == 'ship':
         if data.get('snapshot') != latest: raise ValueError('Open the latest snapshot before closing this review')
         if existing:
             if existing['action'] == action and existing['snapshot_id'] == latest: return existing
             raise ValueError('Review already closed')
         db.execute('INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES(?,?,?,?,?)',
-                   (rid,uuid.uuid4().hex,latest,action,'kept' if action=='keep' else 'requested'))
+                   (rid,uuid.uuid4().hex,latest,action,'requested'))
         db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
         return decision(db, rid)
     if not existing or existing['action'] != 'ship': raise ValueError('No Ship it request for this review')
@@ -64,7 +81,10 @@ def watcher(db, rid):
 def watch(db, rid, data):
     # Serialize watcher ownership.
     db.execute('UPDATE review_watchers SET updated=updated WHERE review_id=?', (rid,))
-    if not db.execute('SELECT 1 FROM reviews WHERE id=?', (rid,)).fetchone(): raise LookupError('Review not found')
+    if not db.execute('SELECT 1 FROM reviews WHERE id=?', (rid,)).fetchone():
+        # Keep deletes review; tell watcher.
+        if data.get('action') == 'heartbeat': return {'status': 'kept', 'removed': True}
+        raise LookupError('Review not found')
     row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
     action = data.get('action')
     if action == 'stop':

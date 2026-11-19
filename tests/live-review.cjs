@@ -31,13 +31,11 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  payload.repos[0].files[0].new='updated\n';const updated=await post('/api/reviews',payload);
  await page.getByRole('button',{name:'Open updated diff',exact:true}).click();
  await page.waitForURL(new RegExp('snapshot='+updated.snapshot));
- await page.getByRole('button',{name:'Keep',exact:true}).click();
- await page.getByText('Kept locally · review closed',{exact:true}).waitFor();
+ page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Keep',exact:true}).click();
+ await page.getByText('Review kept locally and removed',{exact:true}).waitFor();await page.waitForURL(url+'/');
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.equal((await post('/api/reviews/'+id+'/watch',{action:'heartbeat',token})).status,'kept');
- await page.reload();await page.getByText('Kept locally · review closed',{exact:true}).waitFor();
- assert.equal(await page.getByRole('button',{name:'Ship it',exact:true}).isDisabled(),true);
- assert.equal(await page.getByRole('button',{name:'Comment on file',exact:true}).isDisabled(),true);
+ assert.equal((await fetch(url+'/api/reviews/'+id)).status,404);assert.equal(await page.getByText(id,{exact:true}).count(),0);
  const shipId=id+'-ship';payload.id=shipId;await post('/api/reviews',payload);
  await page.goto(url+'/?review='+shipId);await page.getByRole('button',{name:'Ship it',exact:true}).click();
  await page.getByText('Ship it requested · waiting for the working agent',{exact:true}).waitFor();
@@ -52,5 +50,5 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.route('**/api/reviews/*/watch',route=>route.abort());
  await page.locator('#watcher-indicator').getByText('Status unavailable',{exact:true}).waitFor();
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
- assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, snapshot updates, Keep, Ship it, closed comments, pending offline handoff and PR result.');
+ assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, snapshot updates, Keep deletes review, Ship it, closed comments, pending offline handoff and PR result.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

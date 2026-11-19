@@ -71,24 +71,27 @@ class WatchTests(unittest.TestCase):
         result=review_watch.wait(review.api,self.state,timeout=1,interval=.05);timer.join()
         self.assertEqual(result['status'],'comments')
 
-    def test_keep_closes_and_preserves_review(self):
-        tid=self.comment();self.start()
-        result=self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
-        self.assertEqual(result,self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid}))
-        self.assertEqual(self.poll()['status'],'kept');self.assertEqual(self.start()['status'],'kept')
-        self.assertFalse(self.api('/api/reviews/demo/watch')['watcher']['active'])
-        with self.assertRaises(ValueError):self.comment()
-        with self.assertRaises(ValueError):self.api('/api/threads/'+tid+'/messages',{'author':'Reviewer','body':'Late reply'})
-        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
-        self.payload['description']='more changes'
-        with self.assertRaises(ValueError):self.api('/api/reviews',self.payload)
-        self.assertEqual(len(self.api('/api/reviews/demo/feedback')['threads']),1)
-        server.init();self.assertEqual(self.api('/api/reviews/demo')['decision']['status'],'kept')
+    def test_keep_deletes_review_and_stops_watcher(self):
+        self.comment();self.start()
+        with server.session() as db: db.execute('INSERT INTO viewed VALUES(?,?,?)',(self.sid,'app','a.py'))
+        self.assertEqual(self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid}),{'status':'removed'})
+        self.assertEqual(self.poll()['status'],'kept')
+        self.assertEqual(self.api('/api/reviews'),[])
+        with self.assertRaises(Exception):self.api('/api/reviews/demo')
+        with self.assertRaises(Exception):self.start()
+        with server.session() as db:
+            for table in ['snapshots','threads','messages','viewed','review_watchers','review_decisions']:
+                self.assertEqual(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0,table)
+        self.payload['description']='new task';self.assertIn('snapshot',self.api('/api/reviews',self.payload))
+
+    def test_keep_blocked_while_ship_in_flight(self):
+        self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
+        self.assertEqual(self.api('/api/reviews/demo')['decision']['status'],'requested')
 
     def test_stale_snapshot_cannot_close_or_ship(self):
         self.payload['description']='new snapshot';self.api('/api/reviews',self.payload)
-        for action in ['keep','ship']:
-            with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':action,'snapshot':self.sid})
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
         self.assertIsNone(self.api('/api/reviews/demo/watch')['decision'])
 
     def test_ship_request_survives_offline_and_claim_recovery(self):
@@ -144,7 +147,7 @@ class WatchTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.api('/api/threads/'+tid+'/messages',{'author':'Codex','body':'Stale response'})
         new=self.comment();m=self.api('/api/reviews/demo/feedback')['threads'][0]['messages'][0]
         self.assertGreater(m['id'],messages[-1]['id'])
-        self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
+        self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
         with self.assertRaises(ValueError):review.api(self.url,'/api/messages/'+str(m['id']),{},'DELETE')
 
 

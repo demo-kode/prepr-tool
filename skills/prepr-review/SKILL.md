@@ -80,8 +80,8 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
 - Stop when the user says done/stop or the helper returns
   `stopped`, `expired` or `replaced`. On chat stop/task switch, call `watch-stop --state ...` if
   possible and record pending work. On API failure, report the interruption; do not loop forever.
-- Check heartbeat before starting each new edit/reply batch. `kept` closes the review: stop
-  comment processing, preserve local work, and do not publish remotely. `ship_requested` exits
+- Check heartbeat before starting each new edit/reply batch. `kept` means Keep was pressed: review,
+  snapshots and comments are deleted. Stop comment processing, preserve local work, do not publish remotely. `ship_requested` exits
   comment watching and enters the shipping handoff below. Both decisions take priority over
   pending comments; finish an in-flight file write safely, then stop taking review work.
 - After a terminated session, monitoring needs an explicit restart from the working conversation.

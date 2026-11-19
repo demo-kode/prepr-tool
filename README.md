@@ -195,12 +195,13 @@ into Docker. You can also use the page without live monitoring.
 The top-right indicator turns green only while an agent is watching this review. Gray means
 not watching; failed checks show **Status unavailable**. The header shows **working session watching** during live review. Use the two actions at the top right:
 
-- **Keep** closes the local review, preserves your local changes, and stops comment watching.
+- **Keep** preserves your local changes, stops comment watching, and deletes the review with its
+  snapshots and comments. Not allowed while a Ship it request is in progress.
 - **Ship it** closes comment review and asks the working agent to create PRs for the affected
   repositories. The request is pinned to the displayed snapshot; the agent verifies that scope
   before committing or pushing. PR links or a blocking reason appear in the review.
 
-Both decisions persist across restarts. Closed reviews keep their diffs and discussions, but
+Ship it persists across restarts. Shipped reviews keep their diffs and discussions, but
 accept no further comments or snapshots; use a new review for later changes. Ship it requests
 remain pending if the working agent is offline. Returning to the original session delivers the
 request; the app never launches a replacement agent. Ship it requests PR creation, not merging
@@ -290,8 +291,11 @@ The additional `node tests/highlighting.cjs` browser test uses the same disposab
 Playwright settings. It checks language coverage, multiline tokens, exact source preservation,
 comment anchors, safe rendering, automatic language detection, and local-only requests.
 
+`node tests/sidebar.cjs` checks compact file tree, unchanged-move/test filters (both on by default), stable list scroll,
+and earlier-snapshot threads shown on later snapshots (code view unless file deleted; Discussion always).
+
 `node tests/views.cjs` checks split/unified/raw rendering, before/after comment anchors,
 raw pagination, draft protection, pointer/keyboard resizing, saved widths, and mobile layout.
 
-`node tests/live-review.cjs` checks live ownership, Keep/Ship it, durable closure and removal of launcher controls.
+`node tests/live-review.cjs` checks live ownership, Keep deletion, Ship it, durable closure and removal of launcher controls.
 Python tests cover comment polling, acknowledgement, reply filtering, ownership expiry, restart, snapshot-pinned shipping, and duplicate-request recovery.

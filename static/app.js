@@ -3,7 +3,7 @@ const app = document.querySelector('#app');
 const authorInput = document.querySelector('#author');
 authorInput.value = localStorage.getItem('prepr-author') || 'Reviewer';
 authorInput.addEventListener('change', () => localStorage.setItem('prepr-author', authorInput.value.trim() || 'Reviewer'));
-const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'open', file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
+const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: localStorage.getItem('prepr-hide-tests')!=='0', sidebarScroll: null, file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
 function btn(text, action, cls='') { const n=el('button',cls,text); n.type='button'; if(cls.split(' ').includes('review-edit'))n.disabled=!!state.review?.decision; n.addEventListener('click', () => Promise.resolve(action()).catch(error => toast(error.message))); return n; }
 function iconBtn(label,icon,action,cls='') {
@@ -32,7 +32,29 @@ function resizeHandle(label, read, write, bounds, fromPointer, reset, step=10) {
 function time(iso) { return new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function toast(text) { const n=document.querySelector('#toast'); n.textContent=text; n.classList.add('visible'); clearTimeout(toast.timer); toast.timer=setTimeout(()=>n.classList.remove('visible'),4500); }
 async function api(path, data, method='POST') { const response=await fetch(path, data===undefined ? {} : {method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const result=await response.json(); if(!response.ok) throw Error(result.error || 'Request failed'); return result; }
-function currentThreads() { return state.review.threads.filter(t=>t.snapshot_id===state.review.snapshot); }
+// Earlier threads stay visible on later snapshots unless file deleted.
+function fileThreads(repo,path,status) { return state.review.threads.filter(t=>t.repo===repo&&t.path===path&&(t.snapshot_id===state.review.snapshot||(t.snapshot_id<state.review.snapshot&&status!=='D'))); }
+function snapshotNumber(id) { const i=state.review.snapshots.findIndex(s=>s.id===id);return state.review.snapshots.length-i; }
+function splitLines(text) {
+  // Match Python splitlines, used by persisted comment anchors.
+  const lines=text.split(/\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/);if(lines.at(-1)==='')lines.pop();return lines;
+}
+// Map earlier anchor onto this snapshot: same line, nearest identical line, else old position.
+function carryThread(t,f) {
+  if(t.snapshot_id===state.review.snapshot)return t;
+  const origin={side:t.side,line:t.line},carried={...t,carried:true,origin};
+  if(t.side==='file')return carried;
+  if(typeof f[t.side]!=='string')return {...carried,side:'file',line:0,changed:true};
+  const lines=splitLines(f[t.side]);let line=lines[t.line-1]===t.code?t.line:0;
+  if(!line&&t.code.trim())lines.forEach((text,i)=>{if(text===t.code&&(!line||Math.abs(i+1-t.line)<Math.abs(line-t.line)))line=i+1;});
+  return {...carried,line:line||Math.min(Math.max(t.line,1),Math.max(lines.length,1)),changed:!line};
+}
+function isTest(path) {
+  const name=path.split('/').pop();
+  return /(^|\/)(tests?|__tests__|specs?|fixtures?|testdata)\//i.test(path)||/^test_|_test\.|\.(test|spec|tftest)\.|[a-z0-9]Tests?\.[a-z0-9]+$/.test(name);
+}
+function shownFile(f) { return (!state.hideNoDiff||!noDiff(f))&&(!state.hideTests||!isTest(f.path)); }
+function noDiff(f) { return !f.added&&!f.removed&&(['R','C'].includes(f.status)||(f.status==='D'&&!!f.movedTo)); }
 function key(repo,path) { return `${repo}\0${path}`; }
 function viewed(repo,path) { return state.review.viewed.some(v=>v.repo===repo && v.path===path); }
 function totalFiles() { return state.review.repos.reduce((n,r)=>n+r.files.length,0); }
@@ -43,7 +65,8 @@ async function openReview(id, snapshot, selection) {
   state.review=await api(`/api/reviews/${encodeURIComponent(id)}${snapshot?`?snapshot=${snapshot}`:''}`);
   if(selection) state.selected=selection;
   if(!state.selected || !state.review.repos.some(r=>r.name===state.selected.repo && r.files.some(f=>f.path===state.selected.path))) {
-    const r=state.review.repos.find(r=>r.files.length); state.selected=r?{repo:r.name,path:r.files[0].path}:null;
+    const shown=shownFile,r=state.review.repos.find(r=>r.files.some(shown))||state.review.repos.find(r=>r.files.length);
+    state.selected=r?{repo:r.name,path:(r.files.find(shown)||r.files[0]).path}:null;
   }
   setLocation(); renderShell();
   if(state.tab==='files') await loadFile(); else renderDiscussion();
@@ -78,15 +101,46 @@ function renderShell() {
   } else app.append(el('section','discussion'));
 }
 function renderSidebar() {
-  const side=document.querySelector('.sidebar');side.replaceChildren();const search=el('input','search');search.type='search';search.placeholder='Find a file…';search.setAttribute('aria-label','Filter files');search.value=state.query;side.append(search);
-  const list=el('div');side.append(list);
-  const paint=()=>{list.replaceChildren();for(const r of state.review.repos){const files=r.files.filter(f=>(r.name+'/'+f.path).toLowerCase().includes(state.query.toLowerCase()));if(!files.length)continue;
-    const section=el('div','repo'),details=el('details');details.open=true;const heading=el('summary','repo-title',r.name);heading.append(el('small','',String(files.length)));details.append(heading);
-    for(const f of files){const active=state.selected && key(r.name,f.path)===key(state.selected.repo,state.selected.path);const b=btn('',async()=>{if(!canNavigate())return;state.selected={repo:r.name,path:f.path};setLocation();renderSidebar();await loadFile();},'file-nav'+(active?' active':'')); b.title=f.path;
-      b.append(el('span',`file-status ${f.status}`,f.status));const label=el('span','file-label',f.path.split('/').pop());if(f.path.includes('/'))label.append(el('small','',f.path.slice(0,f.path.lastIndexOf('/'))));b.append(label);
-      const count=currentThreads().filter(t=>t.repo===r.name&&t.path===f.path&&t.status==='open').length;if(count)b.append(el('span','file-comment-count',`${count} ◦`));if(viewed(r.name,f.path))b.append(el('span','view-tick','✓'));details.append(b);
-    }section.append(details);list.append(section);
-  }if(!list.children.length)list.append(el('p','muted','No matching files.'));};search.addEventListener('input',()=>{state.query=search.value;paint();});paint();
+  const side=document.querySelector('.sidebar');if(!side)return;side.replaceChildren();
+  const tools=el('div','sidebar-tools'),search=el('input','search');search.type='search';search.placeholder='Find a file…';search.setAttribute('aria-label','Filter files');search.value=state.query;
+  const all=state.review.repos.flatMap(r=>r.files),filter=(stateKey,storage,text,title,count)=>{
+    if(!count)return;const label=el('label','sidebar-filter'),box=el('input');box.type='checkbox';box.checked=state[stateKey];
+    box.addEventListener('change',()=>{state[stateKey]=box.checked;localStorage.setItem(storage,box.checked?'1':'0');paint();});
+    label.title=title;label.append(box,document.createTextNode(`${text} (${count})`));tools.append(label);
+  };
+  tools.append(search);
+  filter('hideNoDiff','prepr-hide-nodiff','Hide unchanged moves','Hide moved or copied files without content changes',all.filter(noDiff).length);
+  filter('hideTests','prepr-hide-tests','Hide tests','Hide test files and fixtures',all.filter(f=>isTest(f.path)).length);
+  side.append(tools);
+  const list=el('div','file-tree');side.append(list);
+  const paint=()=>{list.replaceChildren();const query=state.query.toLowerCase();
+    for(const r of state.review.repos){
+      const files=r.files.filter(f=>(r.name+'/'+f.path).toLowerCase().includes(query)&&(shownFile(f)||fileThreads(r.name,f.path,f.status).length||isSelected(r.name,f.path)));if(!files.length)continue;
+      const details=el('details','repo');details.open=true;const heading=el('summary','repo-title');heading.append(el('span','repo-name',r.name),el('small','',String(files.length)));details.append(heading);
+      const groups=new Map();for(const f of files){const dir=f.path.includes('/')?f.path.slice(0,f.path.lastIndexOf('/')):'';if(!groups.has(dir))groups.set(dir,[]);groups.get(dir).push(f);}
+      for(const dir of [...groups.keys()].sort()){
+        if(dir){const folder=el('div','folder',dir);folder.title=dir;details.append(folder);}
+        for(const f of groups.get(dir))details.append(fileButton(r,f,!!dir));
+      }
+      list.append(details);
+    }
+    if(!list.children.length)list.append(el('p','muted','No matching files.'));};
+  search.addEventListener('input',()=>{state.query=search.value;paint();});paint();
+  side.addEventListener('scroll',()=>{state.sidebarScroll=side.scrollTop;});
+  if(state.sidebarScroll!==null)side.scrollTop=state.sidebarScroll;else side.querySelector('.file-nav.active')?.scrollIntoView({block:'nearest'});
+}
+function isSelected(repo,path) { return !!state.selected&&key(repo,path)===key(state.selected.repo,state.selected.path); }
+function fileButton(r,f,nested) {
+  const b=btn('',()=>selectFile({repo:r.name,path:f.path}),'file-nav'+(nested?' nested':'')+(isSelected(r.name,f.path)?' active':''));b.title=`${r.name}/${f.path}`;b.dataset.key=key(r.name,f.path);
+  b.append(el('span',`file-status ${f.status}`,f.status),el('span','file-label',f.path.split('/').pop()));
+  const count=fileThreads(r.name,f.path,f.status).filter(t=>t.status==='open').length;if(count)b.append(el('span','file-comment-count',`${count} ◦`));
+  if(viewed(r.name,f.path))b.append(el('span','view-tick','✓'));return b;
+}
+// Swap highlight only; full re-render resets list scroll.
+async function selectFile(selection) {
+  if(!canNavigate())return;state.selected=selection;setLocation();
+  for(const node of document.querySelectorAll('.file-nav'))node.classList.toggle('active',node.dataset.key===key(selection.repo,selection.path));
+  await loadFile();
 }
 async function loadFile() {
   const panel=document.querySelector('.main-panel');if(!panel)return;
@@ -110,7 +164,7 @@ function renderFile() {
   const r=state.review.repos.find(r=>r.name===repo);panel.append(el('div','branch-line',`${r.branch}  ·  ${r.base.slice(0,8)} → working tree at ${r.head.slice(0,8)}`));
   if(f.oldRepo)panel.append(el('div','move-note',`Git comparison: ${f.oldRepo}/${f.oldPath} @ ${f.oldBase.slice(0,8)} → ${repo}/${path}`));
   else if(f.status==='R')panel.append(el('div','file-note',`Renamed from ${f.oldPath}`));
-  if(f.movedTo){const note=el('div','move-note',`Moved to ${f.movedTo.repo}/${f.movedTo.path}`);note.append(btn('Review moved file',async()=>{if(!canNavigate())return;state.selected=f.movedTo;setLocation();renderSidebar();await loadFile();}));panel.append(note);}
+  if(f.movedTo){const note=el('div','move-note',`Moved to ${f.movedTo.repo}/${f.movedTo.path}`);note.append(btn('Review moved file',()=>selectFile(f.movedTo)));panel.append(note);}
   panel.append(el('section','file-discussion'));
   if(f.oldMode!==f.newMode && f.oldMode && f.newMode)panel.append(el('div','file-note',`Mode: ${f.oldMode} → ${f.newMode}`));
   if(f.note)panel.append(el('div','file-note',f.note));
@@ -132,10 +186,10 @@ function renderFile() {
   }
   const tbody=el('tbody');table.append(tbody);scroll.append(table);frame.append(scroll);panel.append(frame);
   if(split){const divider=resizeHandle('Resize diff columns',()=>ratio,value=>{ratio=value;frame.style.setProperty('--split-ratio',`${value}%`);localStorage.setItem('prepr-split-ratio',value);},()=>[20,80],x=>(x-frame.getBoundingClientRect().left)/frame.getBoundingClientRect().width*100,50,2);divider.classList.add('diff-divider');frame.append(divider);}
-  const fileThreads=currentThreads().filter(t=>t.repo===repo&&t.path===path),placed=new Set();
-  for(const thread of fileThreads.filter(t=>t.side==='file')){placed.add(thread.id);panel.querySelector('.file-discussion').append(renderThread(thread));}
+  const threads=fileThreads(repo,path,f.status).map(t=>carryThread(t,f)),placed=new Set();
+  for(const thread of threads.filter(t=>t.side==='file')){placed.add(thread.id);panel.querySelector('.file-discussion').append(renderThread(thread));}
   const appendThreads=(row,anchors)=>{
-    const matching=fileThreads.filter(t=>!placed.has(t.id)&&anchors.some(a=>t.side===a.side&&t.line===a.line));
+    const matching=threads.filter(t=>!placed.has(t.id)&&anchors.some(a=>t.side===a.side&&t.line===a.line));
     if(!matching.length)return;
     const tr=el('tr','thread-row'),cell=el('td');cell.colSpan=split?2:1;
     for(const thread of matching){placed.add(thread.id);cell.append(renderThread(thread));}tr.append(cell);row.after(tr);
@@ -155,8 +209,7 @@ function renderFile() {
   if(state.view==='raw'){
     const text=f[rawSide];
     if(typeof text==='string'){
-      // Match Python splitlines, used by persisted comment anchors.
-      const lines=text.split(/\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/);if(lines.at(-1)==='')lines.pop();
+      const lines=splitLines(text);
       const limit=f.rawLimit||2000;lines.slice(0,limit).forEach((text,index)=>appendSingle(rawSide,{number:index+1,text},''));
       if(lines.length>limit)panel.append(btn(`Show next ${Math.min(2000,lines.length-limit).toLocaleString()} lines (${limit.toLocaleString()} / ${lines.length.toLocaleString()})`,()=>{if(!canNavigate())return;const top=panel.scrollTop;f.rawLimit=limit+2000;renderFile();panel.scrollTop=top;},'raw-more'));
     }
@@ -175,7 +228,7 @@ function renderFile() {
   }
   if(state.view!=='raw' && !f.blocks.length && !f.note)panel.append(el('div','file-note',f.movedTo?'Review the destination comparison for content changes.':f.old===f.new?'No text changes. File moved or permissions changed.':'Line-ending or final-newline change.'));
   const syntaxStatus=el('span','syntax-status');syntaxStatus.setAttribute('role','status');panel.querySelector('.branch-line').append(syntaxStatus);PreprHighlight.apply(table,f,'auto',syntaxStatus);
-  const hidden=fileThreads.filter(t=>!placed.has(t.id));if(hidden.length){const section=el('div','discussion');section.append(el('h2','','Comments outside this view'));for(const t of hidden){section.append(el('pre','anchor-code',`${t.side}:${t.line}  ${t.code}`),renderThread(t));}panel.append(section);}
+  const hidden=threads.filter(t=>!placed.has(t.id));if(hidden.length){const section=el('div','discussion');section.append(el('h2','','Comments outside this view'));for(const t of hidden){section.append(el('pre','anchor-code',`${t.side}:${t.line}  ${t.code}`),renderThread(t));}panel.append(section);}
 }
 function composer(onSave,onCancel,label='Add a comment') {
   const box=el('form','composer');box.append(el('label','composer-label',label));const input=el('textarea');input.placeholder='Ask a question or suggest a change…';input.setAttribute('aria-label',label);input.maxLength=20000;input.required=true;box.append(input);
@@ -199,7 +252,8 @@ function startComment(row,side,line) {
 }
 async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderDiscussion();}
 function renderThread(t){
-  const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',t.side==='file'?'File comment':`${t.side==='old'?'Before':'After'} line ${t.line}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);
+  const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');const anchor=t.origin||t;top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',anchor.side==='file'?'File comment':`${anchor.side==='old'?'Before':'After'} line ${anchor.line}`));
+  if(t.carried)top.append(el('small','carried-note',`Snapshot ${snapshotNumber(t.snapshot_id)}${t.changed?' · code changed since':''}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
   for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('span','avatar',m.author.slice(0,2).toUpperCase()),el('strong','',m.author),el('time','',time(m.created)),iconBtn('Delete comment','trash',async()=>{if(!canNavigate())return;await api('/api/messages/'+m.id,{},'DELETE');await reloadThreads();toast('Comment deleted');},'delete-comment review-edit'));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
   const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply review-edit');thread.append(reply);return thread;
 }
@@ -207,7 +261,10 @@ function renderDiscussion(){const panel=document.querySelector('.discussion');pa
  const list=state.review.threads.filter(t=>state.threadFilter==='all'||t.status===state.threadFilter);
  if(!list.length){const empty=el('div','empty-state');empty.append(el('h2','','No comments here yet'),el('p','','Click a line number in the diff to start a discussion.'));panel.append(empty);}
  for(const t of list){const item=el('div','discussion-item');const index=state.review.snapshots.findIndex(s=>s.id===t.snapshot_id);const label=`${t.repo} / ${t.path} · ${t.side}:${t.line} · Snapshot ${state.review.snapshots.length-index}${t.snapshot_id!==state.review.snapshots[0].id?' (earlier)':''}`;
- item.append(btn(label,async()=>{if(!canNavigate())return;state.tab='files';await openReview(state.review.id,t.snapshot_id,{repo:t.repo,path:t.path});document.querySelector(`[data-thread="${t.id}"]`)?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.side==='file'?'Comment on file':t.code),renderThread(t));panel.append(item);}
+ item.append(btn(label,async()=>{if(!canNavigate())return;state.tab='files';const selection={repo:t.repo,path:t.path};
+  // Latest first; fall back to original snapshot when file gone.
+  await openReview(state.review.id,null,selection);let node=document.querySelector(`[data-thread="${t.id}"]`);
+  if(!node){await openReview(state.review.id,t.snapshot_id,selection);node=document.querySelector(`[data-thread="${t.id}"]`);}node?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.side==='file'?'Comment on file':t.code),renderThread(t));panel.append(item);}
 }
 async function home(){const reviews=await api('/api/reviews');const page=el('section','home'),intro=el('div','home-intro'),copy=el('div');copy.append(el('div','eyebrow','Your workspace'),el('h1','','Reviews before pull requests'),el('p','','Inspect the changes. Leave feedback where it matters.'));intro.append(copy,el('span','pill purple',`${reviews.length} reviews`));page.append(intro);
  for(const r of reviews){const link=el('a','review-item');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));const meta=el('div','meta-line');meta.append(el('span','',r.id),el('span','',r.decision?'Closed · '+(r.decision.action==='keep'?'kept locally':r.decision.status):`${r.openThreads} open threads`),el('span','',`Updated ${time(r.updated)}`));link.append(meta);page.append(link);}
