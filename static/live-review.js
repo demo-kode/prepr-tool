@@ -1,0 +1,49 @@
+'use strict';
+(() => {
+  let refreshing=false;
+  async function refresh() {
+    const holder=document.querySelector('.live-review-status');
+    if(!holder||!state.review||refreshing)return;
+    const rid=state.review.id;refreshing=true;
+    try {
+      const result=await api('/api/reviews/'+rid+'/watch');
+      if(!holder.isConnected||state.review?.id!==rid)return;
+      state.review.decision=result.decision;
+      for(const button of document.querySelectorAll('.review-keep,.review-ship'))button.disabled=!!result.decision;
+      for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
+      let feedback;
+      if(result.watcher){
+        const current=state.review;
+        feedback=await api('/api/reviews/'+rid+'/feedback');
+        if(!holder.isConnected||state.review!==current)return;
+        if(!state.draft&&!document.querySelector('.composer')&&!document.activeElement?.matches('input,select,textarea')&&
+           (state.tab!=='files'||state.file)&&JSON.stringify(feedback.threads)!==JSON.stringify(state.review.threads)){
+          const panel=document.querySelector('.main-panel'),top=panel?.scrollTop,left=panel?.scrollLeft;
+          state.review.threads=feedback.threads;renderShell();
+          if(state.tab==='files'){renderFile();const next=document.querySelector('.main-panel');next.scrollTop=top||0;next.scrollLeft=left||0;}else renderDiscussion();
+          return;
+        }
+      }
+      const signature=JSON.stringify([result,feedback?.latestSnapshot]);if(holder.dataset.signature===signature)return;
+      holder.dataset.signature=signature;holder.replaceChildren();
+      if(result.decision){
+        const d=result.decision,labels={kept:'Kept locally · review closed',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
+        holder.append(el('span','',labels[d.status]));
+        if(d.result)holder.append(el('span','',d.result));
+        return;
+      }
+      if(!result.watcher)return;
+      if(result.watcher.active){
+        holder.append(el('span','',`${result.watcher.author} · working session watching`));
+      }else holder.append(el('span','','Live review ended. Ask the working agent to resume.'));
+      if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
+    }catch(e){if(holder.isConnected)holder.textContent=e.message;}finally{refreshing=false;}
+  }
+  globalThis.PreprLive={refresh:()=>setTimeout(refresh,0),decide:async action=>{
+    if(!canNavigate())return;
+    const rid=state.review.id;
+    await api('/api/reviews/'+rid+'/decision',{action,snapshot:state.review.snapshot});
+    await refresh();
+  }};
+  setInterval(refresh,2000);refresh();
+})();

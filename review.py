@@ -243,9 +243,34 @@ def main():
     p.add_argument('review'); p.add_argument('--json', action='store_true'); p.add_argument('--open', action='store_true')
     p = sub.add_parser('reply'); p.add_argument('thread'); p.add_argument('body'); p.add_argument('--author', default='Codex')
     p = sub.add_parser('resolve'); p.add_argument('thread'); p.add_argument('--reopen', action='store_true')
+    p = sub.add_parser('watch-start', help='Attach the working agent to an accepted live review')
+    p.add_argument('review'); p.add_argument('--state', required=True, type=Path)
+    p.add_argument('--author', default='Codex'); p.add_argument('--session')
+    for command in ['watch', 'watch-ack', 'watch-heartbeat', 'watch-stop']:
+        p = sub.add_parser(command); p.add_argument('--state', required=True, type=Path)
+        if command == 'watch': p.add_argument('--timeout', default=45, type=float)
+    for command in ['ship-claim','ship-verify','ship-result']:
+        p=sub.add_parser(command);p.add_argument('--state',required=True,type=Path)
+        if command=='ship-result':
+            p.add_argument('--status',required=True,choices=['shipped','blocked']);p.add_argument('--body',required=True)
     sub.add_parser('list')
     args = parser.parse_args()
-    if args.command == 'publish':
+    if args.command.startswith('ship-'):
+        import review_watch
+        if args.command=='ship-verify': result=review_watch.verify_shipping(args.state,capture_repository)
+        else: result=review_watch.ship(api,args.state,'claim' if args.command=='ship-claim' else 'complete' if args.status=='shipped' else 'block',None if args.command=='ship-claim' else args.body)
+        print(json.dumps(result,indent=2,ensure_ascii=False))
+    elif args.command.startswith('watch'):
+        import review_watch
+        if args.command == 'watch-start': result = review_watch.start(api,args.url,args.review,args.state,args.author,args.session)
+        elif args.command == 'watch': result = review_watch.wait(api,args.state,args.timeout)
+        elif args.command == 'watch-ack': result = review_watch.acknowledge(args.state)
+        else:
+            state = json.loads(args.state.read_text())
+            if args.command == 'watch-heartbeat': result = review_watch.heartbeat(api,state)
+            else: result = api(state['url'],'/api/reviews/'+state['review']+'/watch',{'action':'stop','token':state['token']})
+        print(json.dumps(result,indent=2,ensure_ascii=False))
+    elif args.command == 'publish':
         spec = json.loads(args.manifest.read_text())
         repos = prepare_comparisons([capture_repository(r) for r in spec['repos']], spec.get('comparisons', []))
         data = {'id':spec['id'], 'title':spec['title'], 'description':spec.get('description',''), 'repos':repos}

@@ -1,3 +1,15 @@
 .local/
 __pycache__/
 *.pyc
+
+# Local runtime overrides and credentials.
+compose.override.yaml
+compose.override.yml
+.env
+.env.*
+*.pem
+*.key
+*.sqlite
+*.sqlite-*
+
+node_modules/

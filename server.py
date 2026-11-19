@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import uuid
+import live_review
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +50,9 @@ def init():
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id), author TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS viewed(snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), repo TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(snapshot_id,repo,path));
         ''')
+        live_review.init(db)
+        if 'deleted' not in [row[1] for row in db.execute('PRAGMA table_info(messages)')]:
+            db.execute('ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
 
 
 def required_text(data, key, limit=200):
@@ -80,8 +84,8 @@ def threads(db, review):
                          WHERE s.review_id=? ORDER BY t.created,t.id''', (review,))
     for row in rows:
         thread = dict(row)
-        thread['messages'] = [dict(m) for m in db.execute('SELECT * FROM messages WHERE thread_id=? ORDER BY id', (row['id'],))]
-        result.append(thread)
+        thread['messages'] = [dict(m) for m in db.execute('SELECT id,thread_id,author,body,created FROM messages WHERE thread_id=? AND deleted=0 ORDER BY id', (row['id'],))]
+        if thread['messages']: result.append(thread)
     return result
 
 
@@ -139,11 +143,13 @@ def validate_payload(data):
 
 def publish(db, data):
     validate_payload(data)
+    db.execute('UPDATE reviews SET updated=updated WHERE id=?', (data['id'],))
     payload = json.dumps(data, sort_keys=True, separators=(',', ':'))
     fingerprint = hashlib.sha256(payload.encode()).hexdigest()
     last = db.execute('SELECT id,fingerprint FROM snapshots WHERE review_id=? ORDER BY id DESC LIMIT 1', (data['id'],)).fetchone()
     if last and last['fingerprint'] == fingerprint:
         return {'review': data['id'], 'snapshot': last['id'], 'unchanged': True}
+    live_review.require_open(db,data['id'])
     stamp = now()
     db.execute('''INSERT INTO reviews VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                   title=excluded.title,description=excluded.description,updated=excluded.updated''',
@@ -164,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -176,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         self.handle_request('PATCH')
+
+    def do_DELETE(self):
+        self.handle_request('DELETE')
 
     def handle_request(self, method):
         try:
@@ -214,8 +223,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send(500, {'error': 'Server error; check container logs'})
 
     def route(self, db, method, path, query, data):
+        message_match = re.fullmatch(r'/api/messages/(\d+)', path)
+        if message_match and method == 'DELETE':
+            db.execute('UPDATE messages SET deleted=deleted WHERE id=?',(message_match[1],))
+            row=db.execute('SELECT s.review_id FROM messages m JOIN threads t ON t.id=m.thread_id JOIN snapshots s ON s.id=t.snapshot_id WHERE m.id=?',(message_match[1],)).fetchone()
+            if row is None: raise LookupError('Comment not found')
+            live_review.require_open(db,row['review_id'])
+            db.execute('UPDATE messages SET deleted=1 WHERE id=?',(message_match[1],))
+            return {'ok':True}
+        decision_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/decision', path)
+        if decision_match and method == 'POST':
+            return live_review.decide(db,decision_match[1],data)
+        watch_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/watch', path)
+        if watch_match:
+            if method == 'POST': return live_review.watch(db, watch_match[1], data)
+            if method == 'GET': return {'watcher': live_review.watcher(db, watch_match[1]),'decision':live_review.decision(db,watch_match[1])}
         if method == 'GET' and path == '/api/health':
             return {'ok': True}
+        assets = {
+            '/live-review.js': 'live-review.js', '/extra-grammars.js': 'extra-grammars.js', '/languages.js': 'languages.js', '/highlight.js': 'highlight.js',
+            '/highlight-worker.js': 'highlight-worker.js', '/vendor/shiki.js': 'vendor/shiki.js',
+        }
+        if method == 'GET' and path in assets:
+            self.send(200, (STATIC / assets[path]).read_bytes(), 'text/javascript; charset=utf-8')
+            return None
         if method == 'GET' and path in ('/', '/app.js', '/style.css'):
             name, mime = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8')}[path]
             self.send(200, (STATIC / name).read_bytes(), mime)
@@ -224,8 +255,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'POST':
                 return publish(db, data)
             if method == 'GET':
-                return [dict(row) for row in db.execute('''SELECT r.*, (SELECT max(id) FROM snapshots WHERE review_id=r.id) AS latest,
-                       (SELECT count(*) FROM threads t JOIN snapshots s ON s.id=t.snapshot_id WHERE s.review_id=r.id AND t.status='open') AS openThreads
+                return [{**dict(row),'decision':live_review.decision(db,row['id'])} for row in db.execute('''SELECT r.*, (SELECT max(id) FROM snapshots WHERE review_id=r.id) AS latest,
+                       (SELECT count(*) FROM threads t JOIN snapshots s ON s.id=t.snapshot_id WHERE s.review_id=r.id AND t.status='open' AND EXISTS(SELECT 1 FROM messages m WHERE m.thread_id=t.id AND m.deleted=0)) AS openThreads
                        FROM reviews r ORDER BY updated DESC''')]
         match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)', path)
         if match and method == 'GET':
@@ -244,7 +275,7 @@ class Handler(BaseHTTPRequestHandler):
                 brief['files'] = [{k:v for k,v in f.items() if k not in ('old', 'new', 'blocks')} for f in r['files']]
                 repos.append(brief)
             viewed = [dict(row) for row in db.execute('SELECT repo,path FROM viewed WHERE snapshot_id=?', (sid,))]
-            return {**dict(review), 'snapshot': sid, 'snapshots': versions, 'repos': repos, 'threads': threads(db, rid), 'viewed': viewed}
+            return {**dict(review), 'decision':live_review.decision(db,rid), 'snapshot': sid, 'snapshots': versions, 'repos': repos, 'threads': threads(db, rid), 'viewed': viewed}
         match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/feedback', path)
         if match and method == 'GET':
             latest = db.execute('SELECT max(id) FROM snapshots WHERE review_id=?', (match[1],)).fetchone()[0]
@@ -259,6 +290,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/threads' and method == 'POST':
             sid = int(data['snapshot'])
             _, payload = snapshot(db, sid)
+            live_review.require_open(db,payload['id'])
             f = file_in(payload, data['repo'], data['path'])
             side, line = data['side'], data['line']
             if side == 'file' and type(line) is int and line == 0:
@@ -281,6 +313,10 @@ class Handler(BaseHTTPRequestHandler):
             tid = match[1]
             if not db.execute('SELECT 1 FROM threads WHERE id=?', (tid,)).fetchone():
                 raise LookupError('Thread not found')
+            rid = db.execute('SELECT s.review_id FROM threads t JOIN snapshots s ON s.id=t.snapshot_id WHERE t.id=?',(tid,)).fetchone()[0]
+            live_review.require_open(db,rid)
+            if not db.execute('SELECT 1 FROM messages WHERE thread_id=? AND deleted=0',(tid,)).fetchone():
+                raise LookupError('Thread deleted')
             if method == 'POST' and match[2] == 'messages':
                 author, body = required_text(data, 'author', 100), required_text(data, 'body', 20000)
                 db.execute('INSERT INTO messages(thread_id,author,body,created) VALUES(?,?,?,?)', (tid, author, body, now()))

@@ -1,0 +1,97 @@
+"""Track live review ownership; no agent execution."""
+import re
+import time
+import json
+import uuid
+
+
+def init(db):
+    db.execute('CREATE TABLE IF NOT EXISTS review_watchers(review_id TEXT PRIMARY KEY REFERENCES reviews(id), token TEXT NOT NULL, author TEXT NOT NULL, session TEXT NOT NULL, updated REAL NOT NULL, stopped INTEGER NOT NULL DEFAULT 0)')
+    db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
+
+
+def decision(db, rid):
+    row = db.execute('SELECT * FROM review_decisions WHERE review_id=?', (rid,)).fetchone()
+    if row is None: return None
+    return {k:row[k] for k in ['id','snapshot_id','action','status','result']}
+
+
+def require_open(db, rid):
+    if decision(db, rid): raise ValueError('Local review is closed; preserve its approved snapshot and use a new review for further changes')
+
+
+def decide(db, rid, data):
+    # Serialize decisions with ownership and publication.
+    db.execute('UPDATE reviews SET updated=updated WHERE id=?', (rid,))
+    latest = db.execute('SELECT max(id) FROM snapshots WHERE review_id=?', (rid,)).fetchone()[0]
+    if latest is None: raise LookupError('Review not found')
+    existing = decision(db, rid)
+    action = data.get('action')
+    if action in ('keep', 'ship'):
+        if data.get('snapshot') != latest: raise ValueError('Open the latest snapshot before closing this review')
+        if existing:
+            if existing['action'] == action and existing['snapshot_id'] == latest: return existing
+            raise ValueError('Review already closed')
+        db.execute('INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES(?,?,?,?,?)',
+                   (rid,uuid.uuid4().hex,latest,action,'kept' if action=='keep' else 'requested'))
+        db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
+        return decision(db, rid)
+    if not existing or existing['action'] != 'ship': raise ValueError('No Ship it request for this review')
+    owner = db.execute('SELECT token FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
+    if owner is None or owner['token'] != data.get('token'): raise ValueError('Only the attached working agent can handle this request')
+    if data.get('request') != existing['id']: raise ValueError('Ship request changed')
+    if action == 'claim':
+        if existing['status'] not in ('requested','preparing'): raise ValueError('Ship request already finished')
+        db.execute("UPDATE review_decisions SET status='preparing',claimed_by=? WHERE review_id=?", (owner['token'],rid))
+        payload = json.loads(db.execute('SELECT payload FROM snapshots WHERE id=?', (existing['snapshot_id'],)).fetchone()[0])
+        return {'decision':decision(db,rid),'reconcile':existing['status']=='preparing','payload':payload}
+    if action in ('complete', 'block'):
+        row = db.execute('SELECT claimed_by FROM review_decisions WHERE review_id=?', (rid,)).fetchone()
+        if existing['status'] != 'preparing' or row['claimed_by'] != owner['token']: raise ValueError('Claim the request before recording a result')
+        result = data.get('result','')
+        if not isinstance(result,str) or not 1 <= len(result.strip()) <= 10000: raise ValueError('Provide PR links or the blocking reason')
+        db.execute('UPDATE review_decisions SET status=?,result=? WHERE review_id=?', ('shipped' if action=='complete' else 'blocked',result.strip(),rid))
+        return decision(db,rid)
+    raise ValueError('Invalid review decision')
+
+
+def watcher(db, rid):
+    row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
+    if row is None: return None
+    return {'author': row['author'], 'active': not row['stopped'] and row['updated'] > time.time()-120 and not decision(db,rid)}
+
+
+def watch(db, rid, data):
+    # Serialize watcher ownership.
+    db.execute('UPDATE review_watchers SET updated=updated WHERE review_id=?', (rid,))
+    if not db.execute('SELECT 1 FROM reviews WHERE id=?', (rid,)).fetchone(): raise LookupError('Review not found')
+    row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
+    action = data.get('action')
+    if action == 'stop':
+        if data.get('token') and (row is None or row['token'] != data['token']): return {'status': 'replaced'}
+        db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
+        return {'status': 'stopped'}
+    token = data.get('token', '')
+    if not isinstance(token, str) or not re.fullmatch(r'[a-f0-9]{32}', token): raise ValueError('Invalid watcher token')
+    active = watcher(db, rid)
+    if action == 'start':
+        if active and active['active'] and row['token'] != token: raise ValueError('Another working agent is watching this review')
+        author, session = data.get('author', ''), data.get('session', '')
+        if not isinstance(author, str) or not 1 <= len(author.strip()) <= 100: raise ValueError('Invalid watcher author')
+        if not isinstance(session, str) or len(session)>200: raise ValueError('Invalid session reference')
+        db.execute('INSERT OR REPLACE INTO review_watchers VALUES(?,?,?,?,?,0)', (rid,token,author.strip(),session,time.time()))
+    elif action == 'heartbeat':
+        if row is None or row['token'] != token: return {'status': 'replaced'}
+        closed = decision(db,rid)
+        if closed: return {'status':'kept' if closed['action']=='keep' else 'ship_requested', 'decision':closed}
+        if row['stopped']: return {'status': 'stopped'}
+        if not active['active']: return {'status': 'expired'}
+        db.execute('UPDATE review_watchers SET updated=? WHERE review_id=?', (time.time(),rid))
+    else: raise ValueError('Invalid watcher action')
+    closed = decision(db,rid)
+    if closed:
+        db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?',(rid,))
+        return {'status':'kept' if closed['action']=='keep' else 'ship_requested','decision':closed}
+    return {'status': 'watching'}
+
+
