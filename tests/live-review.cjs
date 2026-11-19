@@ -51,8 +51,9 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.goto(url+'/?review='+id);await page.getByText('Kept locally · review closed',{exact:true}).waitFor();
  for(const name of ['Keep','Ship it','Comment on file'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),true,name);
  await page.goto(url+'/');assert.equal(await page.locator('.review-item',{has:page.getByText(id,{exact:true})}).count(),0);
- await page.getByRole('button',{name:/^Completed/}).click();page.once('dialog',dialog=>dialog.accept());
- await kept.getByRole('button',{name:'Delete review'}).click();await page.getByText('Review deleted',{exact:true}).waitFor();
+ await page.getByRole('button',{name:/^Completed/}).click();
+ await kept.getByRole('button',{name:'Delete review'}).click();await page.getByRole('dialog').getByRole('button',{name:'Cancel'}).click();assert.equal(await kept.count(),1);
+ await kept.getByRole('button',{name:'Delete review'}).click();await page.getByRole('dialog').getByRole('button',{name:'Delete',exact:true}).click();await page.getByText('Review deleted',{exact:true}).waitFor();
  assert.equal((await fetch(url+'/api/reviews/'+id)).status,404);assert.equal(await kept.count(),0);
  const shipId=id+'-ship';payload.id=shipId;await post('/api/reviews',payload);
  await page.goto(url+'/?review='+shipId);await page.getByRole('button',{name:'Ship it',exact:true}).click();

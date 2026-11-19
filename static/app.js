@@ -31,6 +31,11 @@ function resizeHandle(label, read, write, bounds, fromPointer, reset, step=10) {
 }
 function time(iso) { return new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function toast(text) { const n=document.querySelector('#toast'); n.textContent=text; n.classList.add('visible'); clearTimeout(toast.timer); toast.timer=setTimeout(()=>n.classList.remove('visible'),4500); }
+// Embedded in VS Code panel: no native dialogs/popups. Host gets location + external links.
+const embedded=(()=>{try{return window.self!==window.top;}catch{return true;}})();
+function hostPost(message){if(embedded)window.parent.postMessage(message,'*');}
+function ask(message,ok){return new Promise(resolve=>{const d=el('dialog','ask'),actions=el('div','ask-actions'),cancel=el('button','','Cancel'),go=el('button','danger',ok);cancel.type=go.type='button';cancel.onclick=()=>d.close('cancel');go.onclick=()=>d.close('ok');actions.append(cancel,go);d.append(el('p','',message),actions);d.addEventListener('close',()=>{resolve(d.returnValue==='ok');d.remove();});document.body.append(d);d.showModal();cancel.focus();});}
+if(embedded)document.addEventListener('click',e=>{const a=e.target.closest?.('a[href]');if(!a)return;const url=new URL(a.href,location.href);if(url.origin===location.origin&&a.target!=='_blank')return;e.preventDefault();if(/^https?:$/.test(url.protocol))hostPost({type:'prepr:open-external',url:url.href});},true);
 async function api(path, data, method='POST') { const response=await fetch(path, data===undefined ? {} : {method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const result=await response.json(); if(!response.ok) throw Error(result.error || 'Request failed'); return result; }
 // Earlier threads stay visible on later snapshots unless file deleted.
 function fileThreads(repo,path,status) { return state.review.threads.filter(t=>t.repo===repo&&t.path===path&&(t.snapshot_id===state.review.snapshot||(t.snapshot_id<state.review.snapshot&&status!=='D'))); }
@@ -58,9 +63,15 @@ function noDiff(f) { return !f.added&&!f.removed&&(['R','C'].includes(f.status)|
 function key(repo,path) { return `${repo}\0${path}`; }
 function viewed(repo,path) { return state.review.viewed.some(v=>v.repo===repo && v.path===path); }
 function totalFiles() { return state.review.repos.reduce((n,r)=>n+r.files.length,0); }
-function canNavigate() { if (!state.draft) return true; if(!confirm('Discard your unsaved comment?')) return false; state.draft=false; return true; }
+function canNavigate() {
+  if (!state.draft) return true;
+  if(!embedded){if(!confirm('Discard your unsaved comment?')) return false; state.draft=false; return true;}
+  // No sync confirm in panel: ask, discard on OK, user repeats action.
+  ask('Discard your unsaved comment?','Discard').then(ok=>{if(!ok)return;state.draft=false;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());toast('Comment discarded');});
+  return false;
+}
 window.addEventListener('beforeunload', event=>{if(state.draft){event.preventDefault();event.returnValue='';}});
-function setLocation() { const url=new URL(location); url.search=''; url.searchParams.set('review',state.review.id); url.searchParams.set('snapshot',state.review.snapshot); if(state.selected) {url.searchParams.set('repo',state.selected.repo);url.searchParams.set('file',state.selected.path);} history.replaceState(null,'',url); }
+function setLocation() { const url=new URL(location); url.search=''; url.searchParams.set('review',state.review.id); url.searchParams.set('snapshot',state.review.snapshot); if(state.selected) {url.searchParams.set('repo',state.selected.repo);url.searchParams.set('file',state.selected.path);} history.replaceState(null,'',url); hostPost({type:'prepr:location',title:state.review.title,href:url.href}); }
 async function openReview(id, snapshot, selection) {
   state.review=await api(`/api/reviews/${encodeURIComponent(id)}${snapshot?`?snapshot=${snapshot}`:''}`);
   if(selection) state.selected=selection;
@@ -365,14 +376,14 @@ async function home(tab){
     if(d){const [cls,text]={kept:['kept','Kept'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Creating PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
     if(!completed(r))meta.append(el('span','',`${r.openThreads} open threads`));
     meta.append(el('span','',`Updated ${time(r.updated)}`));link.append(meta);item.append(link);
-    if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!confirm(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));
+    if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!await ask(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`,'Delete'))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));
     page.append(item);
   }
   if(!list.length){const empty=el('div','empty-state');
     if(state.homeTab==='completed')empty.append(el('h2','','No completed reviews'),el('p','','Reviews you Keep or Ship appear here.'));
     else empty.append(el('h2','','Ready for your first review'),el('p','','Your agent publishes one through the prepr-review skill.'),el('code','','python3 review.py publish task.json'));
     page.append(empty);}
-  app.replaceChildren(page);
+  app.replaceChildren(page);hostPost({type:'prepr:location',title:'Reviews',href:location.href});
 }
 const params=new URLSearchParams(location.search);
 (params.has('review')?openReview(params.get('review'),params.get('snapshot'),params.has('repo')&&params.has('file')?{repo:params.get('repo'),path:params.get('file')}:null):home()).catch(error=>{app.replaceChildren(el('div','error',error.message));});

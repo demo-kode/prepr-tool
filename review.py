@@ -282,6 +282,71 @@ def api(url, path, data=None, method=None):
         raise ValueError(exc.read().decode()) from exc
 
 
+
+# Per-user setup (first skill run): VS Code panel choice + PR platform access. Kept in ignored .local.
+PR_PLATFORMS = ['github', 'azure-devops', 'gitlab', 'bitbucket', 'other', 'none']
+VSCODE_EXTENSION = 'demo-kode.prepr'
+
+
+def setup_path():
+    return Path(os.environ.get('PREPR_SETUP') or Path(__file__).resolve().parent / '.local' / 'setup.json')
+
+
+def load_setup():
+    try:
+        return json.loads(setup_path().read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def save_setup(**changes):
+    cfg = {**load_setup(), **{k: v for k, v in changes.items() if v is not None}}
+    path = setup_path(); path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(cfg, f, indent=2)
+    return cfg
+
+
+def setup_status(cfg):
+    missing = [k for k in ('vscode', 'pr') if k not in cfg]
+    return {'configured': not missing, 'missing': missing, **cfg}
+
+
+def open_target(cfg, url, review, snapshot=None):
+    query = 'review=' + review + (f'&snapshot={snapshot}' if snapshot else '')
+    if cfg.get('vscode') == 'installed':
+        return 'vscode', f'vscode://{VSCODE_EXTENSION}/open?{query}'
+    return 'browser', f'{url.rstrip("/")}/?{query}'
+
+
+def vscode_install():
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'vscode'))
+    import build
+    vsix, ext_id = build.build(Path(__file__).resolve().parent / '.local' / 'vscode')
+    done = subprocess.run(['code', '--install-extension', str(vsix), '--force'], capture_output=True, text=True)
+    if done.returncode:
+        raise ValueError('VS Code install failed: ' + (done.stderr or done.stdout).strip())
+    save_setup(vscode='installed')
+    return {'installed': ext_id, 'vsix': str(vsix), 'output': done.stdout.strip()}
+
+
+def open_review(url, review, snapshot=None):
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', review):
+        raise ValueError('Invalid review ID')
+    kind, target = open_target(load_setup(), url, review, snapshot)
+    if kind == 'vscode':
+        try:
+            if subprocess.run(['code', '--open-url', target], capture_output=True).returncode == 0:
+                return {'opened': 'vscode', 'url': target}
+        except FileNotFoundError:
+            pass
+        kind, target = open_target({}, url, review, snapshot)
+    import webbrowser
+    if not webbrowser.open(target):
+        raise ValueError('No browser available; open ' + target)
+    return {'opened': kind, 'url': target}
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--url', default=os.environ.get('PREPR_URL', 'http://127.0.0.1:18744'))
@@ -306,6 +371,13 @@ def main():
         if command=='ship-result':
             p.add_argument('--status',required=True,choices=['shipped','blocked']);p.add_argument('--body',required=True)
     sub.add_parser('list')
+    p = sub.add_parser('setup', help='Show or record first-run choices: VS Code panel, PR platform access')
+    p.add_argument('--vscode', choices=['installed', 'declined'])
+    p.add_argument('--pr-platform', choices=PR_PLATFORMS)
+    p.add_argument('--pr-access', help='How agent reaches PR platform: CLI, account, org/project, target branch')
+    sub.add_parser('vscode-install', help='Build and install the PrePR VS Code extension')
+    p = sub.add_parser('open', help='Open review: VS Code panel when installed, else browser')
+    p.add_argument('review'); p.add_argument('--snapshot', type=int)
     args = parser.parse_args()
     if args.command.startswith('ship-'):
         import review_watch
@@ -347,6 +419,18 @@ def main():
         print(api(args.url, '/api/threads/' + args.thread + '/messages', {'author':args.author,'body':args.body}))
     elif args.command == 'resolve':
         print(api(args.url, '/api/threads/' + args.thread, {'status':'open' if args.reopen else 'resolved'}, 'PATCH'))
+    elif args.command == 'setup':
+        cfg = load_setup()
+        if args.pr_platform or args.pr_access:
+            pr = {**cfg.get('pr', {}), **({'platform': args.pr_platform} if args.pr_platform else {}),
+                  **({'access': args.pr_access} if args.pr_access else {})}
+            cfg = save_setup(pr=pr)
+        if args.vscode: cfg = save_setup(vscode=args.vscode)
+        print(json.dumps(setup_status(cfg), indent=2, ensure_ascii=False))
+    elif args.command == 'vscode-install':
+        print(json.dumps(vscode_install(), indent=2))
+    elif args.command == 'open':
+        print(json.dumps(open_review(args.url, args.review, args.snapshot), indent=2))
     else:
         print(json.dumps(api(args.url, '/api/reviews'), indent=2))
 

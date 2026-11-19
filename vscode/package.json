@@ -1,0 +1,64 @@
+{
+  "name": "prepr",
+  "displayName": "PrePR",
+  "description": "Review agent changes before the pull request, in a slicker VS Code tab.",
+  "version": "0.2.0",
+  "publisher": "demo-kode",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#111318",
+    "theme": "dark"
+  },
+  "keywords": [
+    "code review",
+    "pull request",
+    "agent",
+    "diff"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/demo-kode/prepr-tool"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri",
+    "onWebviewPanel:prepr"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "prepr.open",
+        "title": "Show all reviews",
+        "category": "PrePR"
+      },
+      {
+        "command": "prepr.openReview",
+        "title": "Open review…",
+        "category": "PrePR"
+      }
+    ],
+    "configuration": {
+      "title": "PrePR",
+      "properties": {
+        "prepr.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:18744",
+          "description": "PrePR service URL."
+        }
+      }
+    }
+  }
+}

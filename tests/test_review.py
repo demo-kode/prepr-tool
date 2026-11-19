@@ -125,7 +125,7 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as caught:urlopen(req)
         self.assertEqual(caught.exception.code,404)
         with urlopen(self.url) as result:
-            self.assertIn("frame-ancestors 'none'",result.headers['Content-Security-Policy'])
+            self.assertIn("frame-ancestors 'self' vscode-webview: vscode-file:",result.headers['Content-Security-Policy'])
 
     def test_hunk_line_numbers_and_blank_lines(self):
         rows=server.diff_rows('a\nb\nc\n','a\n\nc\nd\n')[0]['rows']

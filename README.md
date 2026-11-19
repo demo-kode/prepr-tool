@@ -31,11 +31,26 @@ ln -s "$(pwd)/skills/prepr-review" ~/.claude/skills/prepr-review   # Claude Code
 ln -s "$(pwd)/skills/prepr-review" ~/.codex/skills/prepr-review    # Codex
 ```
 
+First agent run asks two things once, stored in `.local/setup.json` (no secrets):
+open reviews in VS Code? How to reach your PR platform (GitHub, Azure DevOps, ...)?
+Check or change: `python3 review.py setup [--vscode installed|declined] [--pr-platform P --pr-access TEXT]`.
+
+### VS Code
+
+```bash
+python3 review.py vscode-install     # build .vsix from vscode/, install, record choice
+```
+
+Reviews open in a slicker VS Code tab, page tabs and all. **PrePR** status bar button,
+commands **PrePR: Open review…** / **PrePR: Show all reviews**; agent opens
+`vscode://demo-kode.prepr/open?review=ID`.
+External links go to your browser. Page may be framed only by itself and VS Code.
+
 ## Flow
 
 1. Work with agent as usual. Change set ready: agent creates PR branch in each affected repo,
    commits there (local only), writes manifest, publishes, offers to open PrePR.
-2. Accept. Page opens. Top-right light green: **Agent watching**. Amber: **Agent working**
+2. Accept. Page opens (VS Code tab or browser). Top-right light green: **Agent watching**. Amber: **Agent working**
    (writing replies or changing code).
 3. Comment on a line (click line number) or whole file.
 4. Agent replies per thread, fixes code when asked, runs checks, commits fix round locally,
@@ -48,6 +63,9 @@ ln -s "$(pwd)/skills/prepr-review" ~/.codex/skills/prepr-review    # Codex
    - **Ship it**: agent pushes PR branches, opens real PRs (one per affected repo) for exact
      snapshot shown. Never merges or deploys. Done: review moves to **Completed** with green
      **PR submitted** token.
+
+Several tasks at once: each gets own review, watcher and PRs; in VS Code each review gets own tab.
+Tasks sharing a repo need own worktree each.
 
 Home page: **Active** and **Completed** tabs. Completed reviews stay archived until you delete
 them (trash icon).
@@ -99,6 +117,7 @@ Moved/copied files compare against original content, also across repos. Header s
 ```bash
 python3 review.py publish review.json           # new snapshot (identical content is reused)
 python3 review.py feedback REVIEW_ID --open     # read open threads
+python3 review.py open REVIEW_ID                # VS Code tab if installed, else browser
 ```
 
 ## Data
@@ -114,4 +133,5 @@ python3 -m unittest discover -s tests
 
 Browser tests (`tests/*.cjs`) need Playwright and disposable server:
 `PREPR_DATA=/tmp/prepr PORT=18745 python3 server.py`, then `node tests/sidebar.cjs` etc.
+Extension logic: `node tests/vscode-extension.cjs` (no VS Code needed).
 Never run against real service.

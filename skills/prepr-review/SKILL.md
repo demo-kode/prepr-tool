@@ -9,13 +9,27 @@ Run CLI from this repo root, two directories above this skill. Resolve symlinks 
 installed in an agent skill directory. Default service: http://127.0.0.1:18744.
 README has manifest fields and startup commands.
 
+## First run
+
+- Run `python3 review.py setup` before first publish in each session. `configured: true`: skip; never
+  ask again.
+- `missing` not empty: ask user once, one combined question, before publishing:
+  - `vscode` missing and `code --version` works: open reviews in a VS Code tab (slicker than browser)?
+    Yes: `python3 review.py vscode-install`. No, or no VS Code: `setup --vscode declined`.
+  - `pr` missing: how to reach PR platform for **Ship it**: platform (GitHub, Azure DevOps, GitLab,
+    Bitbucket, other, none), tool and account (e.g. `gh` as `<user>`, `az repos` org/project),
+    default target branch, reviewer or template rules. Record:
+    `python3 review.py setup --pr-platform github --pr-access 'gh CLI; account <user>; target main'`.
+- Record no secrets: no tokens, passwords, keys. Setup file: ignored `.local/setup.json`.
+- User asks to change choice: rerun `setup` with new flags.
+
 ## Offer live review
 
 - Finish scoped changes and relevant checks. Prepare pinned manifest and local review.
 - Ask user whether to open PrePR. Explicit request to review/watch already counts; never ask
   twice. Decline: review stays available, no open, no monitoring.
-- Accepted: start watcher (below), open review URL in user's browser (browser tool, or `xdg-open`
-  on Linux). Open fails: report it, give URL.
+- Accepted: start watcher (below), then `python3 review.py open REVIEW_ID`: VS Code tab when
+  extension installed, else default browser. Open fails: report it, give URL.
 - Stay in current conversation, same context and model. Answer each comment in its own PrePR
   thread. Never spawn another agent, CLI, chat or fork. Watcher only delivers feedback; runs no model.
 
@@ -28,6 +42,9 @@ README has manifest fields and startup commands.
   reviewed changes.
 - Capture includes branch commits, staged, unstaged, non-ignored new files. Exclude unrelated dirty
   paths explicitly. Finish edits/tests before capture. No concurrent worktree edits.
+- Parallel tasks: one review ID and one checkout per task. Repo already used by another active
+  review or dirty with unrelated work: `git worktree add <path> -b <branch>`, point manifest
+  `path` there. Never share a checkout between active reviews.
 - Create PR branch first in every affected repo: the real branch the hosted PR will use, named per
   repo convention (e.g. `feature/<task>-<slug>`). Reuse suitable existing task branch. Never commit
   on default/target branch. Record it as manifest `branch`.
@@ -119,6 +136,7 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
 - Ship from review PR branches; never create new branches at ship time. First commit any remaining
   in-scope uncommitted changes from approved snapshot. Then push each PR branch as-is (squash only
   if repo convention requires).
+- Reach PR platform as recorded in `setup` `pr`. Repo remote disagrees with it: ask.
 - Find each repo's remote and target branch from Git/task context. Keep unrelated edits. Run
   required checks. Create/update one real PR per affected repo from its PR branch. Ship no commits
   outside this change set. Follow repo PR instructions and templates.

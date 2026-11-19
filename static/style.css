@@ -80,3 +80,4 @@
 .status-token{border-radius:10px;padding:1px 9px;font-size:11px;font-weight:600}.status-token.shipped{color:#0f2a1b;background:var(--green)}.status-token.kept{color:var(--ink);background:#2a303c}
 .status-token.blocked{color:#2a0f14;background:var(--red)}.status-token.pending{color:#e7cb89;background:#352e1d}.delete-review{color:var(--muted)}.delete-review:hover{color:var(--red)}
 .home-tabs+.review-item{border-top:0}
+.ask{background:var(--subtle);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:20px 22px;max-width:440px}.ask::backdrop{background:#0009}.ask p{line-height:1.5}.ask-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}button.danger{background:#5a2630;border-color:#8a3a48;color:#ffd9de}button.danger:hover{background:#6b2c38}

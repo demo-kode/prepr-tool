@@ -13,3 +13,4 @@ compose.override.yml
 *.sqlite-*
 
 node_modules/
+*.vsix
