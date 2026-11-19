@@ -51,7 +51,9 @@ def wait(api, path, timeout=45, interval=2):
         if changes:
             # Advance only after the working agent acknowledges this batch.
             state['pending'] = observed
+            state['batch'] = [t['id'] for t in changes]
             save(path, state)
+            set_activity(api, state, 'reply', state['batch'])
             return {'status':'comments','review':state['review'],'latestSnapshot':feedback['latestSnapshot'],'threads':changes}
         state['seen'] = observed
         save(path, state)
@@ -60,12 +62,25 @@ def wait(api, path, timeout=45, interval=2):
         time.sleep(min(interval, remaining))
 
 
-def acknowledge(path):
+def set_activity(api, state, activity, threads=()):
+    return api(state['url'], '/api/reviews/'+state['review']+'/watch', {'action':'activity','token':state['token'],'activity':activity,'threads':list(threads)})
+
+
+def activity(api, path, kind, threads=None):
+    # Shows agent work per thread; defaults to current batch.
+    state = json.loads(Path(path).read_text())
+    return set_activity(api, state, kind, threads or state.get('batch', []))
+
+
+def acknowledge(path, api=None):
     state = json.loads(Path(path).read_text())
     if 'pending' not in state: raise ValueError('No comment batch to acknowledge')
     state['seen'] = state.pop('pending')
+    state.pop('batch', None)
     save(path, state)
-    return {'status':'acknowledged'}
+    result = {'status':'acknowledged'}
+    if api: result['agent'] = set_activity(api, state, 'idle')['status']
+    return result
 
 
 def ship(api, path, action, result=None):

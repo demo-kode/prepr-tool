@@ -58,7 +58,10 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.keyboard.press('w');await page.locator('.file-header .file-path',{hasText:/^main\.txt$/}).waitFor();
  // Earlier threads carried into latest code view.
  const changed=page.locator('[data-thread="'+moved+'"]'),same=page.locator('[data-thread="'+kept+'"]');
- await changed.waitFor();await changed.getByText('Snapshot 1 · code changed since').waitFor();await changed.getByText('beta2',{exact:true}).waitFor();
+ await changed.waitFor();await changed.getByText('Snapshot 1 · code changed since').waitFor();
+ // Resolved: collapsed to one line, expandable.
+ assert.equal(await changed.getByText('Done in snapshot 2.').isVisible(),false);await changed.locator('.thread-snippet',{hasText:'Rename beta2?'}).waitFor();
+ await changed.getByRole('button',{name:'Show 2'}).click();await changed.getByRole('button',{name:'Hide'}).waitFor();await changed.getByText('beta2',{exact:true}).waitFor();
  await changed.getByText('Done in snapshot 2.').waitFor();assert.equal(await same.locator('.carried-note').textContent(),'Snapshot 1');
  assert.ok(await page.locator('tr:has(code[data-side="new"][data-line="4"]) + tr.thread-row [data-thread="'+kept+'"]').count());
  // Scroll stays when picking a file.
@@ -78,8 +81,12 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.getByRole('button',{name:/^Commits/}).click();await page.locator('.commit-repo-head',{hasText:'main · aaaaaaaa → bbbbbbbb'}).waitFor();
  await page.getByText('Tune main',{exact:true}).click();await page.getByText('Explain why.',{exact:true}).waitFor();await page.getByText('1 file outside review scope').waitFor();
  assert.equal(await page.locator('.commit-file',{hasText:'elsewhere.txt'}).isDisabled(),true);
+ const plain={id:id+'-plain',title:'Uncommitted',repos:[{name:'app',source:'/demo',branch:'main',base:'d'.repeat(40),head:'d'.repeat(40),files:[file('x.txt','M','a\n','b\n',1,1)]}]};
+ await call('/api/reviews',plain);await page.goto(url+'/?review='+plain.id);await page.getByRole('button',{name:/^Commits/}).click();
+ await page.getByText('No commits yet — all changes in this repository are uncommitted.').waitFor();await page.getByText('main · dddddddd + uncommitted changes').waitFor();
+ await page.goto(url+'/?review='+id+'&repo=app&file=main.txt');await page.getByRole('button',{name:/^Commits/}).click();await page.getByText('Tune main',{exact:true}).click();
  await page.screenshot({path:'.local/ui-test/commits.png'});
  await page.locator('.commit-file',{hasText:'main.txt'}).click();await page.locator('.file-header .file-path',{hasText:/^main\.txt$/}).waitFor();
  await page.screenshot({path:'.local/ui-test/sidebar.png'});
- assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, commits tab, inline origin, brand link, deleted-file discussion.');
+ assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, collapsed resolved, commits tab, inline origin, brand link, deleted-file discussion.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

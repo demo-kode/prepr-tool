@@ -55,3 +55,19 @@
 
 .file-header .file-path{flex:0 1 auto}.file-origin{flex:1;min-width:0;font:12px ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}
 .origin-link{border:0;background:none;padding:0;font:inherit;color:var(--accent)}.origin-link:hover{background:none;text-decoration:underline}
+
+.thread-activity{font-size:11px;padding:1px 8px;border-radius:10px;white-space:nowrap}.thread-activity:empty{display:none}
+.thread-activity.working{color:#e7cb89;background:#352e1d}.thread-activity.working:before{content:'';display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:#e0b85a;vertical-align:1px;animation:prepr-pulse 1.2s infinite}
+.thread-activity.waiting-you{color:var(--green);background:#183126}.thread-activity.waiting-agent{color:var(--muted);background:var(--subtle)}
+#watcher-indicator.working .dot{background:#e0b85a;box-shadow:0 0 8px #e0b85a66;animation:prepr-pulse 1.2s infinite}
+@keyframes prepr-pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){#watcher-indicator.working .dot,.thread-activity.working:before{animation:none}}
+
+.thread.collapsed{margin:4px 0}.thread.collapsed>:not(.thread-top){display:none}.thread.collapsed .thread-top{margin:0}
+.thread-snippet{display:none;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}.thread.collapsed .thread-snippet{display:block}
+.thread-top .thread-toggle{margin-left:auto;font-size:11px;padding:3px 9px}.thread-top .thread-toggle+button{margin-left:0}
+
+.thread-row td{background:#1a1e28}.file-discussion{background:#1a1e28;padding-top:4px;padding-bottom:4px}
+.thread{background:#262c3a;border:1px solid #3b4357;border-left:3px solid #8278be;border-radius:6px;padding:10px 16px 6px;max-width:920px}
+.thread.resolved{border-left-color:#56846a;background:#222833}.thread.collapsed{padding:6px 16px}
+.thread .thread-reply,.thread .composer textarea{background:#1c212c}.thread .message-body{color:#e8ebf0}
+.discussion .thread{margin-top:10px}

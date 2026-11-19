@@ -3,7 +3,7 @@ const app = document.querySelector('#app');
 const authorInput = document.querySelector('#author');
 authorInput.value = localStorage.getItem('prepr-author') || 'Reviewer';
 authorInput.addEventListener('change', () => localStorage.setItem('prepr-author', authorInput.value.trim() || 'Reviewer'));
-const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: localStorage.getItem('prepr-hide-tests')!=='0', sidebarScroll: null, file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
+const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: localStorage.getItem('prepr-hide-tests')!=='0', sidebarScroll: null, watcher: null, expanded: new Set(), file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
 function btn(text, action, cls='') { const n=el('button',cls,text); n.type='button'; if(cls.split(' ').includes('review-edit'))n.disabled=!!state.review?.decision; n.addEventListener('click', () => Promise.resolve(action()).catch(error => toast(error.message))); return n; }
 function iconBtn(label,icon,action,cls='') {
@@ -280,9 +280,31 @@ function startComment(row,side,line) {
   cell.append(composer(async body=>{await api('/api/threads',{...anchor,author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Comment saved');},()=>tr.remove(),`Comment on ${side==='old'?'before':'after'} line ${line}`));tr.append(cell);row.after(tr);
 }
 async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderOther();}
+// Thread turn: agent busy, waiting on you, or waiting on agent.
+function threadActivity(t){
+  if(t.status!=='open'||!t.messages.length)return null;const w=state.watcher,last=t.messages.at(-1).author;
+  if(w&&w.activity!=='idle'&&w.threads.includes(t.id))return ['working',`${w.author} ${w.activity==='code'?'is changing code…':'is writing a reply…'}`];
+  if(w)return last===w.author?['waiting-you','Waiting for your reply']:['waiting-agent',`Waiting for ${w.author}`];
+  return last!==(authorInput.value.trim()||'Reviewer')?['waiting-you','Waiting for your reply']:null;
+}
+// Update badges in place; keeps drafts.
+function paintActivity(){
+  for(const node of document.querySelectorAll('.thread[data-thread]')){
+    const t=state.review?.threads.find(x=>x.id===node.dataset.thread),badge=node.querySelector('.thread-activity');if(!t||!badge)continue;
+    const [kind,text]=threadActivity(t)||['',''];badge.className='thread-activity '+kind;badge.textContent=text;
+  }
+}
 function renderThread(t){
   const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');const anchor=t.origin||t;top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',anchor.side==='file'?'File comment':`${anchor.side==='old'?'Before':'After'} line ${anchor.line}`));
-  if(t.carried)top.append(el('small','carried-note',`Snapshot ${snapshotNumber(t.snapshot_id)}${t.changed?' · code changed since':''}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
+  const activity=threadActivity(t)||['',''];top.append(el('span','thread-activity '+activity[0],activity[1]));
+  if(t.carried)top.append(el('small','carried-note',`Snapshot ${snapshotNumber(t.snapshot_id)}${t.changed?' · code changed since':''}`));// Resolved threads start collapsed; toggle keeps state across re-renders.
+  if(t.status==='resolved'){
+    const collapsed=!state.expanded.has(t.id);thread.classList.toggle('collapsed',collapsed);
+    top.append(el('span','thread-snippet',t.messages[0].body.split('\n')[0]));
+    const toggle=btn('',()=>{const now=!thread.classList.toggle('collapsed');if(now)state.expanded.add(t.id);else state.expanded.delete(t.id);toggle.textContent=now?'Hide':`Show ${t.messages.length}`;toggle.setAttribute('aria-expanded',String(now));},'thread-toggle');
+    toggle.textContent=collapsed?`Show ${t.messages.length}`:'Hide';toggle.setAttribute('aria-expanded',String(!collapsed));toggle.title='Show or hide resolved discussion';top.append(toggle);
+  }
+  top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
   for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('span','avatar',m.author.slice(0,2).toUpperCase()),el('strong','',m.author),el('time','',time(m.created)),iconBtn('Delete comment','trash',async()=>{if(!canNavigate())return;await api('/api/messages/'+m.id,{},'DELETE');await reloadThreads();toast('Comment deleted');},'delete-comment review-edit'));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
   const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply review-edit');thread.append(reply);return thread;
 }
@@ -294,9 +316,10 @@ function renderCommits(){
   const panel=document.querySelector('.commits-page');panel.replaceChildren();
   for(const r of state.review.repos){
     const section=el('section','commit-repo'),head=el('div','commit-repo-head');
-    head.append(el('h2','',r.name),el('span','muted',`${r.branch} · ${r.base.slice(0,8)} → ${r.head.slice(0,8)}`));section.append(head);
-    if(!r.commits){section.append(el('p','muted','Commits not captured in this snapshot. Republish to include them.'));panel.append(section);continue;}
-    if(!r.commits.length)section.append(el('p','muted','No commits since base; changes are uncommitted.'));
+    head.append(el('h2','',r.name),el('span','muted',r.base===r.head?`${r.branch} · ${r.head.slice(0,8)} + uncommitted changes`:`${r.branch} · ${r.base.slice(0,8)} → ${r.head.slice(0,8)}`));section.append(head);
+    // Same base/head: nothing committed, regardless of capture.
+    if(r.base===r.head||r.commits?.length===0){section.append(el('p','muted','No commits yet — all changes in this repository are uncommitted.'));panel.append(section);continue;}
+    if(!r.commits){section.append(el('p','muted','Commit list not recorded: this snapshot predates the Commits tab. The next publish will include it.'));panel.append(section);continue;}
     for(const c of r.commits){
       const item=el('details','commit'),summary=el('summary');
       summary.append(el('code','commit-sha',c.sha.slice(0,8)),el('span','commit-subject',c.subject),el('span','muted commit-meta',`${c.author} · ${time(c.date)}`),statSpan(c.files.reduce((n,f)=>n+f.added,0),c.files.reduce((n,f)=>n+f.removed,0)));

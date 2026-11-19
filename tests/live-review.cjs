@@ -19,9 +19,21 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.getByRole('button',{name:'Comment on after line 1',exact:true}).click();
  await page.getByRole('textbox',{name:'Comment on after line 1'}).fill('Why this change?');
  await page.getByRole('button',{name:'Post comment',exact:true}).click();await page.getByText('Why this change?',{exact:true}).waitFor();
+ await page.waitForFunction(()=>document.querySelector('.thread .thread-activity')?.textContent==='Waiting for Codex');
  const feedback=await(await fetch(url+'/api/reviews/'+id+'/feedback')).json(),tid=feedback.threads[0].id;
  await post('/api/threads/'+tid+'/messages',{author:'Codex',body:'Answer from the working session.'});
  await page.getByText('Answer from the working session.',{exact:true}).waitFor();
+ const badge=page.locator(`[data-thread="${tid}"] .thread-activity`);
+ await page.waitForFunction(id=>document.querySelector(`[data-thread="${id}"] .thread-activity`)?.textContent==='Waiting for your reply',tid);
+ await post('/api/reviews/'+id+'/watch',{action:'activity',token,activity:'reply',threads:[tid]});
+ await page.locator('#watcher-indicator.working').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent working');
+ await page.waitForFunction(id=>document.querySelector(`[data-thread="${id}"] .thread-activity`)?.textContent==='Codex is writing a reply…',tid);
+ await post('/api/reviews/'+id+'/watch',{action:'activity',token,activity:'code',threads:[tid]});
+ await page.waitForFunction(id=>document.querySelector(`[data-thread="${id}"] .thread-activity`)?.textContent==='Codex is changing code…',tid);
+ await page.getByText('Codex · changing code',{exact:true}).waitFor();await page.screenshot({path:'.local/ui-test/agent-working.png'});
+ await post('/api/reviews/'+id+'/watch',{action:'activity',token,activity:'idle'});
+ await page.locator('#watcher-indicator.watching').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent watching');
+ assert.equal(await badge.textContent(),'Waiting for your reply');
  await page.getByRole('button',{name:'Reply…',exact:true}).click();
  await page.getByRole('textbox',{name:'Reply to thread',exact:true}).fill('Keep this draft');
  await post('/api/threads/'+tid+'/messages',{author:'Codex',body:'More context.'});
@@ -50,5 +62,5 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.route('**/api/reviews/*/watch',route=>route.abort());
  await page.locator('#watcher-indicator').getByText('Status unavailable',{exact:true}).waitFor();
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
- assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, snapshot updates, Keep deletes review, Ship it, closed comments, pending offline handoff and PR result.');
+ assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, agent activity badges/LED, snapshot updates, Keep deletes review, Ship it, closed comments, pending offline handoff and PR result.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

@@ -73,6 +73,15 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
   test, and reply using `reply --author`. Republish the pinned manifest after code changes.
   Then run `watch-ack --state ...`. Unacknowledged batches replay after interruption; check existing
   replies before duplicating work. New comments arriving during edits remain for the next batch.
+- Report activity so the user sees whose turn it is. A returned batch automatically marks its
+  threads `reply` (page: "<author> is writing a reply…", top light amber **Agent working**).
+  Before editing code, run `watch-activity --state ... --activity code` (optionally
+  `--thread ID`, repeatable; default is the current batch). Switch back with `--activity reply`
+  when only answering. `watch-ack` returns to idle (green **Agent watching**). If interrupted
+  before acknowledging, run `watch-activity --state ... --activity idle`. Never leave a stale
+  `code` or `reply` state while waiting for the user.
+- The page derives each open thread's turn: last message from the agent shows
+  "Waiting for your reply"; a newer user message shows "Waiting for <author>".
 - Keep ownership alive during longer work with `watch-heartbeat --state ...`, at least once per
   minute. The page stops claiming an agent is watching after two minutes without a heartbeat.
 - Waits are bounded to 50 seconds. Use yielding tools so user messages can interrupt. Do not

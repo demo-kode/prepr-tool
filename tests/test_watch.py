@@ -71,6 +71,20 @@ class WatchTests(unittest.TestCase):
         result=review_watch.wait(review.api,self.state,timeout=1,interval=.05);timer.join()
         self.assertEqual(result['status'],'comments')
 
+    def test_agent_activity_follows_batch(self):
+        tid=self.comment();self.start()
+        view=lambda:self.api('/api/reviews/demo/watch')['watcher']
+        self.assertEqual((view()['activity'],view()['threads']),('idle',[]))
+        self.assertEqual(self.poll()['status'],'comments');self.assertEqual((view()['activity'],view()['threads']),('reply',[tid]))
+        review_watch.activity(review.api,self.state,'code');self.assertEqual(view()['activity'],'code')
+        self.assertEqual(review_watch.acknowledge(self.state,review.api)['agent'],'watching');self.assertEqual((view()['activity'],view()['threads']),('idle',[]))
+        state=json.loads(self.state.read_text())
+        with self.assertRaises(ValueError):review_watch.set_activity(review.api,state,'sleep')
+        with self.assertRaises(ValueError):review_watch.set_activity(review.api,state,'code',['bad id'])
+        self.assertEqual(review_watch.set_activity(review.api,{**state,'token':'f'*32},'code')['status'],'replaced')
+        review_watch.activity(review.api,self.state,'code',[tid]);self.api('/api/reviews/demo/watch',{'action':'stop'})
+        self.assertEqual(view()['activity'],'idle')
+
     def test_keep_deletes_review_and_stops_watcher(self):
         self.comment();self.start()
         with server.session() as db: db.execute('INSERT INTO viewed VALUES(?,?,?)',(self.sid,'app','a.py'))

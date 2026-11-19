@@ -36,9 +36,12 @@ ln -s "$(pwd)/skills/prepr-review" ~/.codex/skills/prepr-review    # Codex
 
 1. Work with your agent as usual. When the change set is ready, the agent writes a review
    manifest, publishes it, and offers to open PrePR.
-2. Accept. The page opens and the top-right dot turns green: the agent is watching.
+2. Accept. The page opens and the top-right light turns green: **Agent watching**. It turns
+   amber (**Agent working**) while the agent writes replies or changes code.
 3. Comment on any line (click the line number) or on a whole file.
 4. The agent replies in each thread, fixes code when asked, runs checks and republishes.
+   Each open thread shows whose turn it is: *waiting for the agent*, *agent is writing a reply /
+   changing code*, or *waiting for your reply*. Resolved threads collapse to one line (**Show**).
    **Open updated diff** switches to the new snapshot. Earlier threads and replies stay
    visible on the new code (and always in **Discussion**).
 5. Finish with one of the top-right actions:

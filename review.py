@@ -298,6 +298,9 @@ def main():
     for command in ['watch', 'watch-ack', 'watch-heartbeat', 'watch-stop']:
         p = sub.add_parser(command); p.add_argument('--state', required=True, type=Path)
         if command == 'watch': p.add_argument('--timeout', default=45, type=float)
+    p = sub.add_parser('watch-activity', help='Show agent work on threads: reply, code or idle')
+    p.add_argument('--state', required=True, type=Path); p.add_argument('--activity', required=True, choices=['reply','code','idle'])
+    p.add_argument('--thread', action='append', help='Thread ID; default: current comment batch')
     for command in ['ship-claim','ship-verify','ship-result']:
         p=sub.add_parser(command);p.add_argument('--state',required=True,type=Path)
         if command=='ship-result':
@@ -313,7 +316,8 @@ def main():
         import review_watch
         if args.command == 'watch-start': result = review_watch.start(api,args.url,args.review,args.state,args.author,args.session)
         elif args.command == 'watch': result = review_watch.wait(api,args.state,args.timeout)
-        elif args.command == 'watch-ack': result = review_watch.acknowledge(args.state)
+        elif args.command == 'watch-ack': result = review_watch.acknowledge(args.state, api)
+        elif args.command == 'watch-activity': result = review_watch.activity(api, args.state, args.activity, args.thread)
         else:
             state = json.loads(args.state.read_text())
             if args.command == 'watch-heartbeat': result = review_watch.heartbeat(api,state)

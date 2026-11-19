@@ -7,6 +7,11 @@ import uuid
 
 def init(db):
     db.execute('CREATE TABLE IF NOT EXISTS review_watchers(review_id TEXT PRIMARY KEY REFERENCES reviews(id), token TEXT NOT NULL, author TEXT NOT NULL, session TEXT NOT NULL, updated REAL NOT NULL, stopped INTEGER NOT NULL DEFAULT 0)')
+    columns = [row[1] for row in db.execute('PRAGMA table_info(review_watchers)')]
+    # Agent activity: idle, reply or code, on listed threads.
+    if 'activity' not in columns:
+        db.execute("ALTER TABLE review_watchers ADD COLUMN activity TEXT NOT NULL DEFAULT 'idle'")
+        db.execute("ALTER TABLE review_watchers ADD COLUMN activity_threads TEXT NOT NULL DEFAULT '[]'")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
 
 
@@ -75,7 +80,9 @@ def decide(db, rid, data):
 def watcher(db, rid):
     row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
     if row is None: return None
-    return {'author': row['author'], 'active': not row['stopped'] and row['updated'] > time.time()-120 and not decision(db,rid)}
+    active = not row['stopped'] and row['updated'] > time.time()-120 and not decision(db,rid)
+    return {'author': row['author'], 'active': active, 'activity': row['activity'] if active else 'idle',
+            'threads': json.loads(row['activity_threads']) if active else []}
 
 
 def watch(db, rid, data):
@@ -99,13 +106,19 @@ def watch(db, rid, data):
         author, session = data.get('author', ''), data.get('session', '')
         if not isinstance(author, str) or not 1 <= len(author.strip()) <= 100: raise ValueError('Invalid watcher author')
         if not isinstance(session, str) or len(session)>200: raise ValueError('Invalid session reference')
-        db.execute('INSERT OR REPLACE INTO review_watchers VALUES(?,?,?,?,?,0)', (rid,token,author.strip(),session,time.time()))
-    elif action == 'heartbeat':
+        db.execute("INSERT OR REPLACE INTO review_watchers(review_id,token,author,session,updated,stopped,activity,activity_threads) VALUES(?,?,?,?,?,0,'idle','[]')", (rid,token,author.strip(),session,time.time()))
+    elif action in ('heartbeat', 'activity'):
         if row is None or row['token'] != token: return {'status': 'replaced'}
         closed = decision(db,rid)
         if closed: return {'status':'kept' if closed['action']=='keep' else 'ship_requested', 'decision':closed}
         if row['stopped']: return {'status': 'stopped'}
         if not active['active']: return {'status': 'expired'}
+        if action == 'activity':
+            activity, threads = data.get('activity'), data.get('threads', [])
+            if activity not in ('idle', 'reply', 'code'): raise ValueError('Invalid agent activity')
+            if not isinstance(threads, list) or len(threads) > 200 or not all(isinstance(t, str) and re.fullmatch(r'[a-f0-9]{1,64}', t) for t in threads):
+                raise ValueError('Invalid activity threads')
+            db.execute('UPDATE review_watchers SET activity=?,activity_threads=? WHERE review_id=?', (activity, json.dumps([] if activity == 'idle' else threads), rid))
         db.execute('UPDATE review_watchers SET updated=? WHERE review_id=?', (time.time(),rid))
     else: raise ValueError('Invalid watcher action')
     closed = decision(db,rid)
