@@ -28,3 +28,5 @@
 .live-review-status:empty{display:none}.live-review-status{display:flex;align-items:center;gap:12px;margin:12px 0;font-size:12px;color:var(--muted)}.live-review-status button{padding:3px 8px;font-size:11px}
 
 .icon-button{display:inline-flex;align-items:center;justify-content:center;padding:7px}.icon-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.message-head .delete-comment{margin-left:auto;padding:4px;color:var(--muted)}.delete-comment:hover{color:var(--red)}
+
+.top-right #watcher-indicator{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}#watcher-indicator .dot{background:var(--muted);box-shadow:none}#watcher-indicator.watching .dot{background:var(--green);box-shadow:0 0 8px #82cfa144}@media(max-width:620px){#watcher-indicator .watcher-label{display:none}}

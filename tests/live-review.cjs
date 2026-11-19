@@ -9,10 +9,13 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  const payload={id,title:'Review with the working agent',repos:[{name:'app',source:'/demo',branch:'main',base:'a'.repeat(40),head:'b'.repeat(40),files:[{path:'demo.py',oldPath:'demo.py',status:'M',old:'before\n',new:'after\n',added:1,removed:1}]}]};
  await post('/api/reviews',payload);
  await page.goto(url+'/?review='+id);
+ await page.locator('#watcher-indicator').getByText('Not watching',{exact:true}).waitFor();
+ assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.equal(await page.getByRole('button',{name:'Run agent',exact:true}).count(),0);
  assert.equal(await page.locator('#agent-settings').count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'start',token,author:'Codex',session:'fixture-session'});
  await page.getByText('Codex · working session watching',{exact:true}).waitFor();
+ await page.locator('#watcher-indicator.watching').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent watching');
  await page.getByRole('button',{name:'Comment on after line 1',exact:true}).click();
  await page.getByRole('textbox',{name:'Comment on after line 1'}).fill('Why this change?');
  await page.getByRole('button',{name:'Post comment',exact:true}).click();await page.getByText('Why this change?',{exact:true}).waitFor();
@@ -30,6 +33,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.waitForURL(new RegExp('snapshot='+updated.snapshot));
  await page.getByRole('button',{name:'Keep',exact:true}).click();
  await page.getByText('Kept locally · review closed',{exact:true}).waitFor();
+ assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.equal((await post('/api/reviews/'+id+'/watch',{action:'heartbeat',token})).status,'kept');
  await page.reload();await page.getByText('Kept locally · review closed',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Ship it',exact:true}).isDisabled(),true);
@@ -45,5 +49,8 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await post('/api/reviews/'+shipId+'/decision',{action:'complete',token,request:handoff.decision.id,result:'app: https://example.invalid/pr/1'});
  await page.getByText('Pull requests created · review closed',{exact:true}).waitFor();
  await page.getByText('app: https://example.invalid/pr/1',{exact:true}).waitFor();
+ await page.route('**/api/reviews/*/watch',route=>route.abort());
+ await page.locator('#watcher-indicator').getByText('Status unavailable',{exact:true}).waitFor();
+ assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, snapshot updates, Keep, Ship it, closed comments, pending offline handoff and PR result.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

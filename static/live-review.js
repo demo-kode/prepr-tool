@@ -1,13 +1,21 @@
 'use strict';
 (() => {
-  let refreshing=false;
+  let refreshing=false,watchedReview=null,lastCheck=0;
+  function indicator(active,label,description){
+    const node=document.querySelector('#watcher-indicator');node.classList.toggle('watching',active);node.title=description;
+    const text=node.querySelector('.watcher-label');if(text.textContent!==label)text.textContent=label;
+  }
   async function refresh() {
     const holder=document.querySelector('.live-review-status');
     if(!holder||!state.review||refreshing)return;
     const rid=state.review.id;refreshing=true;
+    if(watchedReview!==rid){watchedReview=rid;indicator(false,'Not watching','Checking whether an agent is watching this review');}
     try {
       const result=await api('/api/reviews/'+rid+'/watch');
       if(!holder.isConnected||state.review?.id!==rid)return;
+      lastCheck=Date.now();
+      const watching=!!result.watcher?.active&&!result.decision;
+      indicator(watching,watching?'Agent watching':'Not watching',watching?`${result.watcher.author} is watching this review`:'No agent is watching this review');
       state.review.decision=result.decision;
       for(const button of document.querySelectorAll('.review-keep,.review-ship'))button.disabled=!!result.decision;
       for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
@@ -37,7 +45,7 @@
         holder.append(el('span','',`${result.watcher.author} · working session watching`));
       }else holder.append(el('span','','Live review ended. Ask the working agent to resume.'));
       if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
-    }catch(e){if(holder.isConnected)holder.textContent=e.message;}finally{refreshing=false;}
+    }catch(e){if(holder.isConnected){holder.textContent=e.message;indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}
   }
   globalThis.PreprLive={refresh:()=>setTimeout(refresh,0),decide:async action=>{
     if(!canNavigate())return;
@@ -45,5 +53,5 @@
     await api('/api/reviews/'+rid+'/decision',{action,snapshot:state.review.snapshot});
     await refresh();
   }};
-  setInterval(refresh,2000);refresh();
+  setInterval(()=>{if(lastCheck&&Date.now()-lastCheck>10000)indicator(false,'Status unavailable','Working-agent status is out of date');refresh();},2000);refresh();
 })();

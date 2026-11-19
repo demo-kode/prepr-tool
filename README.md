@@ -192,7 +192,8 @@ the API and hands it back to the active agent. That agent answers questions, app
 tests, and republishes the same change set. It never starts another CLI or copies chat transcripts
 into Docker. You can also use the page without live monitoring.
 
-The header shows **working session watching** during live review. Use the two actions at the top right:
+The top-right indicator turns green only while an agent is watching this review. Gray means
+not watching; failed checks show **Status unavailable**. The header shows **working session watching** during live review. Use the two actions at the top right:
 
 - **Keep** closes the local review, preserves your local changes, and stops comment watching.
 - **Ship it** closes comment review and asks the working agent to create PRs for the affected
