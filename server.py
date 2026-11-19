@@ -126,7 +126,7 @@ def validate_payload(data):
             if path in paths:
                 raise ValueError('Duplicate file path')
             paths.add(path)
-            if f.get('status') not in ('A', 'M', 'D', 'R', 'T'):
+            if f.get('status') not in ('A', 'M', 'D', 'R', 'C', 'T'):
                 raise ValueError('Invalid file status')
             for side in ('old', 'new'):
                 text = f.get(side)
@@ -241,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
             repos = []
             for r in payload['repos']:
                 brief = {k:v for k,v in r.items() if k != 'files'}
-                brief['files'] = [{k:v for k,v in f.items() if k not in ('old', 'new')} for f in r['files']]
+                brief['files'] = [{k:v for k,v in f.items() if k not in ('old', 'new', 'blocks')} for f in r['files']]
                 repos.append(brief)
             viewed = [dict(row) for row in db.execute('SELECT repo,path FROM viewed WHERE snapshot_id=?', (sid,))]
             return {**dict(review), 'snapshot': sid, 'snapshots': versions, 'repos': repos, 'threads': threads(db, rid), 'viewed': viewed}
@@ -255,21 +255,25 @@ class Handler(BaseHTTPRequestHandler):
         if match and method == 'GET':
             _, payload = snapshot(db, int(match[1]))
             f = file_in(payload, query.get('repo', [''])[0], query.get('path', [''])[0])
-            return {**f, 'blocks': diff_rows(f['old'], f['new'])}
+            return {**f, 'blocks': f['blocks'] if 'blocks' in f else diff_rows(f['old'], f['new'])}
         if path == '/api/threads' and method == 'POST':
             sid = int(data['snapshot'])
             _, payload = snapshot(db, sid)
             f = file_in(payload, data['repo'], data['path'])
             side, line = data['side'], data['line']
-            if side not in ('old', 'new') or type(line) is not int or f[side] is None:
-                raise ValueError('Invalid comment anchor')
-            lines = f[side].splitlines()
-            if not 1 <= line <= len(lines):
-                raise ValueError('Line not in file')
+            if side == 'file' and type(line) is int and line == 0:
+                code = ''
+            else:
+                if side not in ('old', 'new') or type(line) is not int or f[side] is None:
+                    raise ValueError('Invalid comment anchor')
+                lines = f[side].splitlines()
+                if not 1 <= line <= len(lines):
+                    raise ValueError('Line not in file')
+                code = lines[line-1]
             tid = uuid.uuid4().hex[:16]
             author, body = required_text(data, 'author', 100), required_text(data, 'body', 20000)
             db.execute('INSERT INTO threads(id,snapshot_id,repo,path,side,line,code,created) VALUES(?,?,?,?,?,?,?,?)',
-                       (tid, sid, data['repo'], data['path'], side, line, lines[line-1], now()))
+                       (tid, sid, data['repo'], data['path'], side, line, code, now()))
             db.execute('INSERT INTO messages(thread_id,author,body,created) VALUES(?,?,?,?)', (tid, author, body, now()))
             return {'id': tid}
         match = re.fullmatch(r'/api/threads/([a-f0-9]+)/?(messages)?', path)

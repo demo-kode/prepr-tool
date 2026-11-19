@@ -75,21 +75,25 @@ function renderFile() {
   const head=el('div','file-header');head.append(el('span',`file-status ${f.status}`,f.status),el('span','file-path',path));
   const stats=el('span','stats');stats.append(el('span','plus',`+${f.added}`),el('span','minus',`−${f.removed}`));head.append(stats);
   const actions=el('div','file-actions');const label=el('label'),checkbox=el('input');checkbox.type='checkbox';checkbox.checked=viewed(repo,path);checkbox.addEventListener('change',async()=>{try{await api(`/api/snapshots/${state.review.snapshot}/viewed`,{repo,path,viewed:checkbox.checked});state.review.viewed=state.review.viewed.filter(v=>v.repo!==repo||v.path!==path);if(checkbox.checked)state.review.viewed.push({repo,path});renderSidebar();document.querySelector('.progress').textContent=`${state.review.viewed.length} / ${totalFiles()} files viewed`;}catch(e){checkbox.checked=!checkbox.checked;toast(e.message);}});label.append(checkbox,document.createTextNode('Viewed'));actions.append(label);
+  actions.append(btn('Comment on file',startFileComment));
   actions.append(btn('Wrap',()=>document.querySelector('.diff').classList.toggle('nowrap')));head.append(actions);panel.append(head);
   const r=state.review.repos.find(r=>r.name===repo);panel.append(el('div','branch-line',`${r.name}  ·  ${r.branch}  ·  ${r.base.slice(0,8)} → working tree at ${r.head.slice(0,8)}`));
-  if(f.status==='R')panel.append(el('div','file-note',`Renamed from ${f.oldPath}`));
+  if(f.oldRepo)panel.append(el('div','move-note',`Git comparison: ${f.oldRepo}/${f.oldPath} @ ${f.oldBase.slice(0,8)} → ${repo}/${path}`));
+  else if(f.status==='R')panel.append(el('div','file-note',`Renamed from ${f.oldPath}`));
+  if(f.movedTo){const note=el('div','move-note',`Moved to ${f.movedTo.repo}/${f.movedTo.path}`);note.append(btn('Review moved file',async()=>{if(!canNavigate())return;state.selected=f.movedTo;setLocation();renderSidebar();await loadFile();}));panel.append(note);}
+  panel.append(el('div','review-hint','Click + beside a line to leave an inline comment.'),el('section','file-discussion'));
   if(f.oldMode!==f.newMode && f.oldMode && f.newMode)panel.append(el('div','file-note',`Mode: ${f.oldMode} → ${f.newMode}`));
   if(f.note)panel.append(el('div','file-note',f.note));
   const sides=f.status==='A'?['new']:f.status==='D'?['old']:['old','new'];
-  const scroll=el('div','diff-scroll'),table=el('table','diff'+(sides.length===1?' single':''));table.setAttribute('aria-label',`Diff for ${path}`);const th=el('thead'),tr=el('tr');for(const side of sides)tr.append(el('th','',side==='old'?`Before · ${f.oldPath}`:'After · working tree'));th.append(tr);table.append(th);const tbody=el('tbody');table.append(tbody);scroll.append(table);panel.append(scroll);
-  const fileThreads=currentThreads().filter(t=>t.repo===repo && t.path===path);const placed=new Set();
+  const scroll=el('div','diff-scroll'),table=el('table','diff'+(sides.length===1?' single':''));table.setAttribute('aria-label',`Diff for ${path}`);const th=el('thead'),tr=el('tr');for(const side of sides)tr.append(el('th','',side==='old'?`Before · ${f.oldRepo?f.oldRepo+'/':''}${f.oldPath}`:'After · working tree'));th.append(tr);table.append(th);const tbody=el('tbody');table.append(tbody);scroll.append(table);panel.append(scroll);
+  const fileThreads=currentThreads().filter(t=>t.repo===repo && t.path===path);const placed=new Set();for(const t of fileThreads.filter(t=>t.side==='file')){placed.add(t.id);panel.querySelector('.file-discussion').append(renderThread(t));}
   for(const block of f.blocks){const h=el('tr','hunk');const td=el('td','',`@@ before line ${block.oldStart} · after line ${block.newStart} @@`);td.colSpan=sides.length;h.append(td);tbody.append(h);
     for(const row of block.rows){const tr=el('tr');tbody.append(tr);const rowThreads=[];
       for(const side of sides){const l=row[side];const td=el('td',l?(row.kind==='equal'?'':side==='old'?'removed':'added'):'empty');if(l){const line=el('div','code-line');const number=btn(String(l.number),()=>startComment(tr,side,l.number),'line-number');number.title=`Comment on ${side==='old'?'before':'after'} line ${l.number}`;number.setAttribute('aria-label',number.title);line.append(number,el('code','',l.text||' '));td.append(line);rowThreads.push(...fileThreads.filter(t=>t.side===side && t.line===l.number));}tr.append(td);}
       if(rowThreads.length){const threadRow=el('tr','thread-row'),cell=el('td');cell.colSpan=sides.length;for(const t of rowThreads){placed.add(t.id);cell.append(renderThread(t));}threadRow.append(cell);tbody.append(threadRow);}
     }
   }
-  if(!f.blocks.length && !f.note)panel.append(el('div','file-note',f.old===f.new?'No text changes. File added, renamed, or permissions changed.':'Line-ending or final-newline change.'));
+  if(!f.blocks.length && !f.note)panel.append(el('div','file-note',f.movedTo?'Review the destination comparison for content changes.':f.old===f.new?'No text changes. File moved or permissions changed.':'Line-ending or final-newline change.'));
   const hidden=fileThreads.filter(t=>!placed.has(t.id));if(hidden.length){const section=el('div','discussion');section.append(el('h2','','Comments outside diff context'));for(const t of hidden){section.append(el('pre','anchor-code',`${t.side}:${t.line}  ${t.code}`),renderThread(t));}panel.append(section);}
 }
 function composer(onSave,onCancel,label='Add a comment') {
@@ -99,6 +103,14 @@ function composer(onSave,onCancel,label='Add a comment') {
   box.addEventListener('submit',async event=>{event.preventDefault();if(!input.value.trim())return;save.disabled=true;error.textContent='';try{await onSave(input.value.trim());state.draft=false;}catch(e){error.textContent=e.message;save.disabled=false;}});
   input.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();box.requestSubmit();}});setTimeout(()=>input.focus(),0);return box;
 }
+function startFileComment() {
+  if(!canNavigate())return;
+  document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());
+  const area=document.querySelector('.file-discussion'),holder=el('div','reply-composer');
+  const anchor={snapshot:state.review.snapshot,...state.selected,side:'file',line:0};
+  holder.append(composer(async body=>{await api('/api/threads',{...anchor,author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Comment saved');},()=>holder.remove(),'Comment on file'));
+  area.prepend(holder);holder.scrollIntoView({block:'center'});
+}
 function startComment(row,side,line) {
   if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());
   const tr=el('tr','thread-row new-comment-row'),cell=el('td');cell.colSpan=row.children.length;const anchor={snapshot:state.review.snapshot,...state.selected,side,line};
@@ -106,7 +118,7 @@ function startComment(row,side,line) {
 }
 async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderDiscussion();}
 function renderThread(t){
-  const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',`${t.side==='old'?'Before':'After'} line ${t.line}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();}));thread.append(top);
+  const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',t.side==='file'?'File comment':`${t.side==='old'?'Before':'After'} line ${t.line}`));top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();}));thread.append(top);
   for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('span','avatar',m.author.slice(0,2).toUpperCase()),el('strong','',m.author),el('time','',time(m.created)));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
   const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply');thread.append(reply);return thread;
 }
@@ -114,7 +126,7 @@ function renderDiscussion(){const panel=document.querySelector('.discussion');pa
  const list=state.review.threads.filter(t=>state.threadFilter==='all'||t.status===state.threadFilter);
  if(!list.length){const empty=el('div','empty-state');empty.append(el('h2','','No comments here yet'),el('p','','Click a line number in the diff to start a discussion.'));panel.append(empty);}
  for(const t of list){const item=el('div','discussion-item');const index=state.review.snapshots.findIndex(s=>s.id===t.snapshot_id);const label=`${t.repo} / ${t.path} · ${t.side}:${t.line} · Snapshot ${state.review.snapshots.length-index}${t.snapshot_id!==state.review.snapshots[0].id?' (earlier)':''}`;
- item.append(btn(label,async()=>{if(!canNavigate())return;state.tab='files';await openReview(state.review.id,t.snapshot_id,{repo:t.repo,path:t.path});document.querySelector(`[data-thread="${t.id}"]`)?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.code),renderThread(t));panel.append(item);}
+ item.append(btn(label,async()=>{if(!canNavigate())return;state.tab='files';await openReview(state.review.id,t.snapshot_id,{repo:t.repo,path:t.path});document.querySelector(`[data-thread="${t.id}"]`)?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.side==='file'?'Comment on file':t.code),renderThread(t));panel.append(item);}
 }
 async function home(){const reviews=await api('/api/reviews');const page=el('section','home'),intro=el('div','home-intro'),copy=el('div');copy.append(el('div','eyebrow','Your workspace'),el('h1','','Reviews before pull requests'),el('p','','Inspect the changes. Leave feedback where it matters.'));intro.append(copy,el('span','pill purple',`${reviews.length} reviews`));page.append(intro);
  for(const r of reviews){const link=el('a','review-item');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));const meta=el('div','meta-line');meta.append(el('span','',r.id),el('span','',`${r.openThreads} open threads`),el('span','',`Updated ${time(r.updated)}`));link.append(meta);page.append(link);}

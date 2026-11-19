@@ -1,6 +1,6 @@
 # PrePR
 
-Local review workspace for one task across multiple Git repositories. Side-by-side diffs,
+Dark local review workspace for one task across multiple Git repositories. Side-by-side diffs,
 line comments, replies, resolve/reopen, viewed files and immutable review snapshots.
 No hosted service or external runtime dependencies. Python 3.12 standard library and plain JavaScript.
 
@@ -65,6 +65,46 @@ including earlier snapshots. **Refresh** fetches new replies; the snapshot selec
 Comments stay on their original snapshot and code. They are never silently moved to a different
 line after edits. Viewed flags also belong to a snapshot. Older comments remain actionable from
 Discussion; select their anchor to open the original diff.
+
+## Git comparisons
+
+The CLI reads each pinned base directly from Git and compares it with the worktree using
+`git diff --no-index --histogram`. Source paths, branch names and base commits remain visible.
+Moves between repositories compare against their original Git contents. Exact or unambiguous
+same-name matches are detected automatically; source deletions link to the destination comparison.
+New files without a source remain additions.
+
+For a copy, partial move or ambiguous source, add an explicit mapping at manifest root:
+
+```json
+"comparisons": [
+  {
+    "repo": "live",
+    "path": "new-module/settings.tf",
+    "fromRepo": "extensions",
+    "fromPath": "old-module/settings.tf"
+  }
+]
+```
+
+`fromRepo` must be in the same review. The source comes from that repository's pinned base,
+not its modified worktree. Retained sources keep their own normal Git diff. Comparisons show
+provenance; they do not alter Git's index or history.
+
+Use **Comment on file** for general feedback, or the visible **+** beside a line for inline
+feedback. **Post comment** saves immediately; comments and replies are readable by the agent CLI.
+
+## Agent skill
+
+The bundled skill lives at `skills/prepr-review/SKILL.md`. Install it by symlinking that directory
+into your agent's skill directory, for example:
+
+```bash
+ln -s /path/to/prepr-tool/skills/prepr-review ~/.codex/skills/prepr-review
+```
+
+It covers choosing stable Git bases, scoping multi-repo snapshots, move comparisons, preserving
+comments and answering feedback. New sessions can discover it as `$prepr-review`.
 
 ## Agent feedback loop
 

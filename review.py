@@ -6,15 +6,124 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
 import sys
+import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlsplit
 
 LIMIT = 1024 * 1024
+
+
+def git_blocks(old, new):
+    """Diff exact Git/worktree text with Git's histogram algorithm."""
+    if old is None or new is None:
+        return [], 0, 0
+    with tempfile.TemporaryDirectory(prefix='prepr-diff-') as directory:
+        before, after = Path(directory)/'before', Path(directory)/'after'
+        before.write_bytes(old.encode()); after.write_bytes(new.encode())
+        result = subprocess.run(['git', 'diff', '--no-index', '--no-ext-diff', '--no-textconv',
+                                 '--histogram', '--unified=4', '--', str(before), str(after)], capture_output=True)
+    if result.returncode not in (0, 1):
+        raise ValueError(result.stderr.decode(errors='replace'))
+    blocks, removed, added = [], 0, 0
+    block = None
+    left, right = [], []
+    def flush():
+        if block is None:
+            return
+        for i in range(max(len(left), len(right))):
+            block['rows'].append({'kind': 'replace', 'old': left[i] if i < len(left) else None,
+                                  'new': right[i] if i < len(right) else None})
+        left.clear(); right.clear()
+    for line in result.stdout.decode().splitlines():
+        match = re.match(r'^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
+        if match:
+            flush()
+            a, b = map(int, match.groups())
+            block = {'oldStart': a, 'newStart': b, 'rows': []}
+            blocks.append(block)
+        elif block is not None and line.startswith('-'):
+            left.append({'number': a, 'text': line[1:]}); a += 1; removed += 1
+        elif block is not None and line.startswith('+'):
+            right.append({'number': b, 'text': line[1:]}); b += 1; added += 1
+        elif block is not None and line.startswith(' '):
+            flush()
+            block['rows'].append({'kind': 'equal', 'old': {'number': a, 'text': line[1:]},
+                                  'new': {'number': b, 'text': line[1:]}})
+            a += 1; b += 1
+    flush()
+    return blocks, added, removed
+
+
+def prepare_comparisons(repos, comparisons=()):
+    """Pair moves conservatively; explicit mappings also support retained sources."""
+    by_name = {r['name']: r for r in repos}
+    additions = [(r, f) for r in repos for f in r['files'] if f['status'] == 'A']
+    deletions = [(r, f) for r in repos for f in r['files'] if f['status'] == 'D']
+    paired = set()
+
+    def pair(dest_repo, dest, source_repo, source, explicit=False):
+        dest['gitStatus'] = dest['status']
+        dest['status'] = 'R' if source.get('status') == 'D' else 'C'
+        dest['old'] = source['old']
+        dest['oldHash'] = source['oldHash']
+        dest['oldMode'] = source['oldMode']
+        dest['oldPath'] = source['path']
+        dest['oldRepo'] = source_repo['name']
+        dest['oldBase'] = source_repo['base']
+        dest['comparison'] = 'explicit' if explicit else 'detected-move'
+        if source.get('status') == 'D':
+            source['movedTo'] = {'repo': dest_repo['name'], 'path': dest['path']}
+            paired.add((source_repo['name'], source['path']))
+
+    for mapping in comparisons:
+        dest_repo, source_repo = by_name[mapping['repo']], by_name[mapping['fromRepo']]
+        dest = next((f for f in dest_repo['files'] if f['path'] == mapping['path']), None)
+        if dest is None or dest['status'] != 'A':
+            raise ValueError(f'Comparison destination must be an added file: {mapping["path"]}')
+        source_path = mapping['fromPath']
+        source = next((f for f in source_repo['files'] if f['path'] == source_path), None)
+        if source is None:
+            raw = git(source_repo['source'], 'show', f'{source_repo["base"]}:{source_path}')
+            text, digest, note = decode_content(raw)
+            if text is None:
+                raise ValueError(f'Comparison source is not reviewable text: {source_path}')
+            source = {'path':source_path, 'old':text, 'oldHash':digest, 'oldMode':'100644'}
+        if source['old'] is None:
+            raise ValueError(f'Comparison source is not reviewable text: {source_path}')
+        pair(dest_repo, dest, source_repo, source, True)
+
+    for dest_repo, dest in additions:
+        if dest['status'] != 'A' or not dest['new']:
+            continue
+        choices = []
+        for source_repo, source in deletions:
+            if (source_repo['name'], source['path']) in paired or not source['old']:
+                continue
+            same = source['oldHash'] == dest['newHash']
+            if not same and Path(source['path']).name != Path(dest['path']).name:
+                continue
+            ratio = 1 if same else difflib.SequenceMatcher(None, source['old'].splitlines(), dest['new'].splitlines()).ratio()
+            if ratio >= .6:
+                choices.append((ratio, source_repo, source))
+        choices.sort(key=lambda item: item[0], reverse=True)
+        if choices and (len(choices) == 1 or choices[0][0] > choices[1][0] + .05):
+            _, source_repo, source = choices[0]
+            pair(dest_repo, dest, source_repo, source)
+
+    for repo in repos:
+        for f in repo['files']:
+            if f.get('movedTo'):
+                f['blocks'], f['added'], f['removed'] = [], 0, 0
+            else:
+                f['blocks'], f['added'], f['removed'] = git_blocks(f['old'], f['new'])
+            f['diffEngine'] = 'git-histogram'
+    return repos
 
 
 def git(repo, *args):
@@ -138,7 +247,7 @@ def main():
     args = parser.parse_args()
     if args.command == 'publish':
         spec = json.loads(args.manifest.read_text())
-        repos = [capture_repository(r) for r in spec['repos']]
+        repos = prepare_comparisons([capture_repository(r) for r in spec['repos']], spec.get('comparisons', []))
         data = {'id':spec['id'], 'title':spec['title'], 'description':spec.get('description',''), 'repos':repos}
         result = api(args.url, '/api/reviews', data)
         print(f'{args.url}/?review={result["review"]}')
