@@ -72,6 +72,7 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  for(const tid of [moved,kept,deleted])await page.locator('.discussion [data-thread="'+tid+'"]').waitFor();
  await page.getByRole('button',{name:/gone\.txt/}).click();await page.getByText('You’re viewing an earlier snapshot.',{exact:false}).waitFor();
  await page.locator('[data-thread="'+deleted+'"]').waitFor();
+ assert.equal(await page.locator('.topbar .brand').getAttribute('href'),'https://github.com/demo-kode/prepr-tool');assert.equal(await page.locator('.topbar .brand').getAttribute('target'),'_blank');
  // Commits tab replaces branch bar.
  assert.equal(await page.locator('.branch-line').count(),0);
  await page.getByRole('button',{name:/^Commits/}).click();await page.locator('.commit-repo-head',{hasText:'main · aaaaaaaa → bbbbbbbb'}).waitFor();
@@ -80,5 +81,5 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.screenshot({path:'.local/ui-test/commits.png'});
  await page.locator('.commit-file',{hasText:'main.txt'}).click();await page.locator('.file-header .file-path',{hasText:/^main\.txt$/}).waitFor();
  await page.screenshot({path:'.local/ui-test/sidebar.png'});
- assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, commits tab, inline origin, deleted-file discussion.');
+ assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, commits tab, inline origin, brand link, deleted-file discussion.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
