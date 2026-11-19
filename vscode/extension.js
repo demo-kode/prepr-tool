@@ -101,7 +101,7 @@ async function pickReview() {
   let reviews;
   try { reviews = await (await fetch(base() + '/api/reviews', {signal: AbortSignal.timeout(5000)})).json(); }
   catch { return open(); }
-  const done = r => ['kept', 'shipped', 'blocked'].includes(r.decision?.status);
+  const done = r => ['closed', 'shipped', 'blocked'].includes(r.decision?.status);
   const items = [...reviews.filter(r => !done(r)), ...reviews.filter(done)].map(r => ({
     label: r.title, description: r.id, detail: done(r) ? `Completed · ${r.decision.status}` : `${r.openThreads ?? 0} open threads`, id: r.id,
   }));

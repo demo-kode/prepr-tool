@@ -11,6 +11,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import review
 import review_watch
+import live_review
 import server
 
 
@@ -94,26 +95,55 @@ class WatchTests(unittest.TestCase):
         review_watch.activity(review.api,self.state,'code',[tid]);self.api('/api/reviews/demo/watch',{'action':'stop'})
         self.assertEqual(view()['activity'],'idle')
 
-    def test_keep_archives_then_delete_removes(self):
+    def test_close_archives_then_delete_removes(self):
         tid=self.comment();self.start()
         with server.session() as db: db.execute('INSERT INTO viewed VALUES(?,?,?)',(self.sid,'app','a.py'))
         with self.assertRaises(ValueError):review.api(self.url,'/api/reviews/demo',{},'DELETE')
-        result=self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
-        self.assertEqual(result['status'],'kept');self.assertEqual(result,self.api('/api/reviews/demo/decision',{'action':'keep'}))
-        self.assertEqual(self.poll()['status'],'kept');self.assertFalse(self.api('/api/reviews/demo/watch')['watcher']['active'])
-        self.assertEqual(self.api('/api/reviews')[0]['decision']['status'],'kept')
+        result=self.api('/api/reviews/demo/decision',{'action':'close','snapshot':self.sid})
+        self.assertEqual((result['action'],result['status']),('close','closed'));self.assertEqual(result,self.api('/api/reviews/demo/decision',{'action':'close'}))
+        self.assertEqual(result,self.api('/api/reviews/demo/decision',{'action':'keep'}),'old keep alias')
+        self.assertEqual(self.poll()['status'],'closed');self.assertFalse(self.api('/api/reviews/demo/watch')['watcher']['active'])
+        self.assertEqual(self.api('/api/reviews')[0]['decision']['status'],'closed')
         with self.assertRaises(ValueError):self.comment()
         with self.assertRaises(ValueError):self.api('/api/threads/'+tid+'/messages',{'author':'Reviewer','body':'Late'})
         self.assertEqual(review.api(self.url,'/api/reviews/demo',{},'DELETE'),{'status':'deleted'})
-        self.assertEqual(self.api('/api/reviews'),[]);self.assertEqual(self.poll()['status'],'kept')
+        self.assertEqual(self.api('/api/reviews'),[]);self.assertEqual(self.poll()['status'],'closed')
         with server.session() as db:
             for table in ['snapshots','threads','messages','viewed','review_watchers','review_decisions']:
                 self.assertEqual(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0,table)
         self.payload['description']='new task';self.assertIn('snapshot',self.api('/api/reviews',self.payload))
 
-    def test_keep_and_delete_blocked_while_ship_in_flight(self):
+    def test_old_keep_rows_migrate_to_closed(self):
+        self.start()
+        with server.session() as db:
+            db.execute("INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES('demo',?,?,'keep','kept')",('f'*32,self.sid))
+            live_review.init(db)
+        d=self.api('/api/reviews/demo')['decision'];self.assertEqual((d['action'],d['status']),('close','closed'))
+        self.assertEqual(self.poll()['status'],'closed')
+        self.assertEqual(review.api(self.url,'/api/reviews/demo',{},'DELETE'),{'status':'deleted'})
+
+    def test_prs_sent_from_chat_recorded(self):
+        self.start()
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'sent','result':' '})
+        d=self.api('/api/reviews/demo/decision',{'action':'sent','result':'app: https://example.invalid/pr/7'})
+        self.assertEqual((d['status'],d['result']),('shipped','app: https://example.invalid/pr/7'))
+        self.assertEqual(self.poll()['status'],'ship_requested')
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'sent','result':'again'})
+        self.assertEqual(review.api(self.url,'/api/reviews/demo',{},'DELETE'),{'status':'deleted'})
+
+    def test_closed_review_upgrades_to_sent_but_not_mid_ship(self):
+        self.api('/api/reviews/demo/decision',{'action':'close'})
+        d=self.api('/api/reviews/demo/decision',{'action':'sent','result':'app: https://example.invalid/pr/8'})
+        self.assertEqual(d['status'],'shipped')
+        self.payload['id']='other';other=self.api('/api/reviews',self.payload)['snapshot']
+        self.api('/api/reviews/other/decision',{'action':'ship','snapshot':other})
+        with self.assertRaises(ValueError):self.api('/api/reviews/other/decision',{'action':'sent','result':'x'})
+        out=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'review.py'),'--url',self.url,'close','other'],capture_output=True,text=True)
+        self.assertNotEqual(out.returncode,0)
+
+    def test_close_and_delete_blocked_while_ship_in_flight(self):
         self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
-        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'keep','snapshot':self.sid})
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/decision',{'action':'close','snapshot':self.sid})
         with self.assertRaises(ValueError):review.api(self.url,'/api/reviews/demo',{},'DELETE')
         self.assertEqual(self.api('/api/reviews/demo')['decision']['status'],'requested')
 

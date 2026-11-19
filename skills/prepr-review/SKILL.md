@@ -111,7 +111,7 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
 - Stop when user says done/stop, or helper returns `stopped`, `expired` or `replaced`. Chat stop or
   task switch: `watch-stop --state ...` if possible; record pending work. API failure: report it;
   never loop forever.
-- Check heartbeat before each new edit/reply batch. `kept`: user pressed Keep; review archived
+- Check heartbeat before each new edit/reply batch. `closed`: user pressed Close; review archived
   read-only in Completed (user may delete it later). Stop comment work, keep local work, publish
   nothing remotely.
   `ship_requested`: leave comment watching, enter Ship it handoff. Both decisions beat pending
@@ -148,6 +148,22 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
   request; inspect existing remote work first.
 - Queued request cannot wake finished agent. On explicit return to original session,
   `watch-start` surfaces saved decision instead of restarting comment polling.
+
+## Task ended in chat
+
+Keep PrePR in step with what happened. Review must not stay **Active** once its task ended.
+
+- User asks in chat (not **Ship it**) to push/open PRs for change set with a PrePR review: do it as
+  normal task work. Code changed since last snapshot: republish first, so review shows what was sent.
+  Then, after PRs verified:
+  `python3 review.py mark-sent REVIEW_ID --body 'repo: PR URL'` (one line per repo). Review moves
+  to **Completed**, green **PR submitted**. Works on a closed review too.
+- Ship it already requested for that review: use **Ship it handoff** flow (`ship-result`), not
+  `mark-sent`.
+- User drops or finishes task in chat without PR (abandon, keep local, done): `python3 review.py
+  close REVIEW_ID` (same as **Close** button).
+- Partial PRs or failure: no `mark-sent`; report in chat, leave review open.
+- Both stop the watcher; then stop watching.
 
 ## Boundaries
 

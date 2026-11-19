@@ -20,7 +20,7 @@
       state.watcher=w;paintActivity();
       state.review.decision=result.decision;
       for(const button of document.querySelectorAll('.review-ship'))button.disabled=!!result.decision;
-      for(const button of document.querySelectorAll('.review-keep'))button.disabled=!!result.decision;
+      for(const button of document.querySelectorAll('.review-close'))button.disabled=!!result.decision;
       for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
       let feedback;
       if(result.watcher){
@@ -38,7 +38,7 @@
       const signature=JSON.stringify([result,feedback?.latestSnapshot]);if(holder.dataset.signature===signature)return;
       holder.dataset.signature=signature;holder.replaceChildren();
       if(result.decision){
-        const d=result.decision,labels={kept:'Kept locally · review closed',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
+        const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
         if(d.result)holder.append(el('span','',d.result));
         return;
@@ -54,8 +54,8 @@
     if(!canNavigate())return;
     const rid=state.review.id;
     await api('/api/reviews/'+rid+'/decision',{action,snapshot:state.review.snapshot});
-    // Keep archives review; show Completed tab.
-    if(action==='keep'){lastCheck=0;watchedReview=null;indicator(false,'Not watching','No review open');state.review=null;history.replaceState(null,'','/?tab=completed');await home('completed');toast('Review kept · moved to Completed');return;}
+    // Close archives review; show Completed tab.
+    if(action==='close'){lastCheck=0;watchedReview=null;indicator(false,'Not watching','No review open');state.review=null;history.replaceState(null,'','/?tab=completed');await home('completed');toast('Review closed · moved to Completed');return;}
     await refresh();
   }};
   setInterval(()=>{if(lastCheck&&Date.now()-lastCheck>10000)indicator(false,'Status unavailable','Working-agent status is out of date');refresh();},2000);refresh();

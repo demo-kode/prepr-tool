@@ -59,13 +59,17 @@ External links go to your browser. Page may be framed only by itself and VS Code
    **Open updated diff** loads new snapshot. Earlier threads stay visible on new code and in
    **Discussion**.
 5. Finish, top right:
-   - **Keep**: keep local changes, stop watching, move review to **Completed** (read-only).
+   - **Close**: stop watching, leave local changes as they are, move review to **Completed**
+     (read-only).
    - **Ship it**: agent pushes PR branches, opens real PRs (one per affected repo) for exact
      snapshot shown. Never merges or deploys. Done: review moves to **Completed** with green
      **PR submitted** token.
 
 Several tasks at once: each gets own review, watcher and PRs; in VS Code each review gets own tab.
 Tasks sharing a repo need own worktree each.
+
+PRs sent from chat instead of **Ship it**: agent runs `review.py mark-sent ID --body 'repo: URL'`
+(**PR submitted**). Task dropped in chat: `review.py close ID`.
 
 Home page: **Active** and **Completed** tabs. Completed reviews stay archived until you delete
 them (trash icon).
@@ -77,7 +81,7 @@ No live watch also works: tell agent to read feedback when done commenting.
 
 ![Commits tab: commits per repo with expanded details](docs/assets/commits.png)
 
-![Completed tab: shipped review with PR submitted token, kept review](docs/assets/completed.png)
+![Completed tab: shipped review with PR submitted token, closed review](docs/assets/completed.png)
 
 | | |
 | --- | --- |

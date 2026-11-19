@@ -91,7 +91,7 @@ function renderShell() {
   const tools=el('div','title-tools');const versions=el('select');versions.setAttribute('aria-label','Review snapshot');
   r.snapshots.forEach((v,i)=>{const o=el('option','',`Snapshot ${r.snapshots.length-i}${i===0?' · latest':''} — ${time(v.created)}`);o.value=v.id;versions.append(o);});versions.value=r.snapshot;
   versions.addEventListener('change',()=>{if(!canNavigate()){versions.value=r.snapshot;return;}openReview(r.id,Number(versions.value)).catch(e=>toast(e.message));});
-  tools.append(versions,iconBtn('Refresh','refresh',refresh),btn('Keep',()=>PreprLive.decide('keep'),'review-keep'),btn('Ship it',()=>PreprLive.decide('ship'),'primary review-ship'));title.append(tools);header.append(title);
+  tools.append(versions,iconBtn('Refresh','refresh',refresh),btn('Close',()=>PreprLive.decide('close'),'review-close'),btn('Ship it',()=>PreprLive.decide('ship'),'primary review-ship'));title.append(tools);header.append(title);
   header.append(el('div','live-review-status'));
   if(globalThis.PreprLive)PreprLive.refresh();
   if(r.description)header.append(el('p','description',r.description));
@@ -357,8 +357,8 @@ function renderDiscussion(){const panel=document.querySelector('.discussion');pa
   await openReview(state.review.id,null,selection);let node=document.querySelector(`[data-thread="${t.id}"]`);
   if(!node){await openReview(state.review.id,t.snapshot_id,selection);node=document.querySelector(`[data-thread="${t.id}"]`);}node?.scrollIntoView({block:'center'});},'anchor-link'),el('pre','anchor-code',t.side==='file'?'Comment on file':t.code),renderThread(t));panel.append(item);}
 }
-// Home: Active vs Completed (kept, shipped, blocked).
-const completed=r=>['kept','shipped','blocked'].includes(r.decision?.status);
+// Home: Active vs Completed (closed, shipped, blocked).
+const completed=r=>['closed','shipped','blocked'].includes(r.decision?.status);
 async function home(tab){
   if(tab)state.homeTab=tab;state.homeTab=state.homeTab||(new URLSearchParams(location.search).get('tab')==='completed'?'completed':'active');
   const reviews=await api('/api/reviews'),done=reviews.filter(completed),active=reviews.filter(r=>!completed(r));
@@ -373,14 +373,14 @@ async function home(tab){
   for(const r of list){
     const item=el('div','review-item'),link=el('a','review-link');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));
     const meta=el('div','meta-line'),d=r.decision;meta.append(el('span','',r.id));
-    if(d){const [cls,text]={kept:['kept','Kept'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Creating PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
+    if(d){const [cls,text]={closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Creating PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
     if(!completed(r))meta.append(el('span','',`${r.openThreads} open threads`));
     meta.append(el('span','',`Updated ${time(r.updated)}`));link.append(meta);item.append(link);
     if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!await ask(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`,'Delete'))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));
     page.append(item);
   }
   if(!list.length){const empty=el('div','empty-state');
-    if(state.homeTab==='completed')empty.append(el('h2','','No completed reviews'),el('p','','Reviews you Keep or Ship appear here.'));
+    if(state.homeTab==='completed')empty.append(el('h2','','No completed reviews'),el('p','','Reviews you Close or Ship appear here.'));
     else empty.append(el('h2','','Ready for your first review'),el('p','','Your agent publishes one through the prepr-review skill.'),el('code','','python3 review.py publish task.json'));
     page.append(empty);}
   app.replaceChildren(page);hostPost({type:'prepr:location',title:'Reviews',href:location.href});

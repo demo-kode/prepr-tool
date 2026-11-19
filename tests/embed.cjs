@@ -27,7 +27,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await f.getByRole('button',{name:/^Discussion/}).click();await dialog.getByRole('button',{name:'Discard'}).click();
  await f.getByText('Comment discarded',{exact:true}).waitFor();assert.equal(await f.getByRole('textbox',{name:'Comment on after line 1'}).count(),0);
  await f.getByRole('button',{name:/^Discussion/}).click();await f.getByRole('heading',{name:'Review discussion'}).waitFor();
- await post('/api/reviews/'+id+'/decision',{action:'keep'});
+ await post('/api/reviews/'+id+'/decision',{action:'close'});
  await page.evaluate(src=>{document.getElementById('f').src=src;},url+'/?tab=completed');
  await page.waitForFunction(()=>msgs.some(m=>m.type==='prepr:location'&&m.title==='Reviews'));
  const item=f.locator('.review-item',{has:f.getByText(id,{exact:true})});

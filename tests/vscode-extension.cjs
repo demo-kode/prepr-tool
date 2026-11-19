@@ -16,7 +16,7 @@ const vscode={
   },
 };
 const load=Module._load;Module._load=function(req,...a){return req==='vscode'?vscode:load.call(this,req,...a);};
-let healthy=true;global.fetch=async url=>{if(!healthy)throw Error('down');return{ok:true,json:async()=>[{id:'done',title:'Done',decision:{status:'kept'}},{id:'live',title:'Live',openThreads:2}]};};
+let healthy=true;global.fetch=async url=>{if(!healthy)throw Error('down');return{ok:true,json:async()=>[{id:'done',title:'Done',decision:{status:'closed'}},{id:'live',title:'Live',openThreads:2}]};};
 const ext=require('../vscode/extension.js');
 (async()=>{
   ext.activate({subscriptions:[],extensionUri:{s:'/ext'}});

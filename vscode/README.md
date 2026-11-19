@@ -1,7 +1,7 @@
 # PrePR for VS Code
 
 Review your agent's changes before the pull request, right beside your code.
-Same PrePR page (Files, Commits, Discussion, Keep, Ship it), in a slicker VS Code tab.
+Same PrePR page (Files, Commits, Discussion, Close, Ship it), in a slicker VS Code tab.
 
 ## Open a review
 

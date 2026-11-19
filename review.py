@@ -376,6 +376,10 @@ def main():
     p.add_argument('--pr-platform', choices=PR_PLATFORMS)
     p.add_argument('--pr-access', help='How agent reaches PR platform: CLI, account, org/project, target branch')
     sub.add_parser('vscode-install', help='Build and install the PrePR VS Code extension')
+    p = sub.add_parser('close', help='Close review without PR (same as Close button)')
+    p.add_argument('review')
+    p = sub.add_parser('mark-sent', help='Record PRs sent from chat: review moves to Completed, PR submitted')
+    p.add_argument('review'); p.add_argument('--body', required=True, help='Repository: PR URL, one per line')
     p = sub.add_parser('open', help='Open review: VS Code panel when installed, else browser')
     p.add_argument('review'); p.add_argument('--snapshot', type=int)
     args = parser.parse_args()
@@ -429,6 +433,10 @@ def main():
         print(json.dumps(setup_status(cfg), indent=2, ensure_ascii=False))
     elif args.command == 'vscode-install':
         print(json.dumps(vscode_install(), indent=2))
+    elif args.command == 'close':
+        print(json.dumps(api(args.url, '/api/reviews/' + args.review + '/decision', {'action': 'close'}), indent=2))
+    elif args.command == 'mark-sent':
+        print(json.dumps(api(args.url, '/api/reviews/' + args.review + '/decision', {'action': 'sent', 'result': args.body}), indent=2))
     elif args.command == 'open':
         print(json.dumps(open_review(args.url, args.review, args.snapshot), indent=2))
     else:

@@ -13,6 +13,9 @@ def init(db):
         db.execute("ALTER TABLE review_watchers ADD COLUMN activity TEXT NOT NULL DEFAULT 'idle'")
         db.execute("ALTER TABLE review_watchers ADD COLUMN activity_threads TEXT NOT NULL DEFAULT '[]'")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
+    # Keep renamed Close: migrate old rows.
+    db.execute("UPDATE review_decisions SET action='close' WHERE action='keep'")
+    db.execute("UPDATE review_decisions SET status='closed' WHERE status='kept'")
 
 
 def decision(db, rid):
@@ -26,11 +29,11 @@ def require_open(db, rid):
 
 
 def delete_review(db, rid):
-    # Only completed reviews: kept, shipped or blocked.
+    # Only completed reviews: closed, shipped or blocked.
     db.execute('UPDATE reviews SET updated=updated WHERE id=?', (rid,))
     if not db.execute('SELECT 1 FROM reviews WHERE id=?', (rid,)).fetchone(): raise LookupError('Review not found')
     closed = decision(db, rid)
-    if not closed or closed['status'] not in ('kept', 'shipped', 'blocked'): raise ValueError('Only completed reviews can be deleted')
+    if not closed or closed['status'] not in ('closed', 'shipped', 'blocked'): raise ValueError('Only completed reviews can be deleted')
     remove(db, rid)
     return {'status': 'deleted'}
 
@@ -54,14 +57,25 @@ def decide(db, rid, data):
     if latest is None: raise LookupError('Review not found')
     existing = decision(db, rid)
     action = data.get('action')
-    if action in ('keep', 'ship'):
-        # Ship needs displayed snapshot; Keep archives latest.
+    if action == 'keep': action = 'close'  # old clients
+    if action in ('close', 'ship'):
+        # Ship needs displayed snapshot; Close archives latest.
         if action == 'ship' and data.get('snapshot') != latest: raise ValueError('Open the latest snapshot before closing this review')
         if existing:
             if existing['action'] == action and existing['snapshot_id'] == latest: return existing
             raise ValueError('Review already closed')
         db.execute('INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES(?,?,?,?,?)',
-                   (rid,uuid.uuid4().hex,latest,action,'kept' if action=='keep' else 'requested'))
+                   (rid,uuid.uuid4().hex,latest,action,'closed' if action=='close' else 'requested'))
+        db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
+        return decision(db, rid)
+    if action == 'sent':
+        # PRs sent from chat, not Ship it button: record result. Upgrades closed.
+        result = data.get('result')
+        if not isinstance(result, str) or not 1 <= len(result.strip()) <= 4000: raise ValueError('PR result required')
+        if existing and existing['status'] in ('requested', 'preparing'): raise ValueError('Ship it in progress; record result with ship-result')
+        if existing and existing['status'] != 'closed': raise ValueError('Review already ' + existing['status'])
+        db.execute('INSERT OR REPLACE INTO review_decisions(review_id,id,snapshot_id,action,status,result) VALUES(?,?,?,?,?,?)',
+                   (rid, uuid.uuid4().hex, latest, 'ship', 'shipped', result.strip()))
         db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
         return decision(db, rid)
     if not existing or existing['action'] != 'ship': raise ValueError('No Ship it request for this review')
@@ -96,7 +110,7 @@ def watch(db, rid, data):
     db.execute('UPDATE review_watchers SET updated=updated WHERE review_id=?', (rid,))
     if not db.execute('SELECT 1 FROM reviews WHERE id=?', (rid,)).fetchone():
         # Deleted after completion; tell watcher.
-        if data.get('action') == 'heartbeat': return {'status': 'kept', 'removed': True}
+        if data.get('action') == 'heartbeat': return {'status': 'closed', 'removed': True}
         raise LookupError('Review not found')
     row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
     action = data.get('action')
@@ -116,7 +130,7 @@ def watch(db, rid, data):
     elif action in ('heartbeat', 'activity'):
         if row is None or row['token'] != token: return {'status': 'replaced'}
         closed = decision(db,rid)
-        if closed: return {'status':'kept' if closed['action']=='keep' else 'ship_requested', 'decision':closed}
+        if closed: return {'status':'closed' if closed['action']=='close' else 'ship_requested', 'decision':closed}
         if row['stopped']: return {'status': 'stopped'}
         if not active['active']: return {'status': 'expired'}
         if action == 'activity':
@@ -130,7 +144,7 @@ def watch(db, rid, data):
     closed = decision(db,rid)
     if closed:
         db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?',(rid,))
-        return {'status':'kept' if closed['action']=='keep' else 'ship_requested','decision':closed}
+        return {'status':'closed' if closed['action']=='close' else 'ship_requested','decision':closed}
     return {'status': 'watching'}
 
 
