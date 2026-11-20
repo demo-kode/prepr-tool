@@ -126,15 +126,36 @@ function codexArgs(target, prompt) {
     ...(target.session ? [target.session] : []), prompt];
 }
 
+async function post(pathname, body) {
+  const r = await fetch(base() + pathname, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: AbortSignal.timeout(5000)});
+  const result = await r.json();
+  if (!r.ok) throw Error(result.error || `HTTP ${r.status}`);
+  return result;
+}
+
 // Wake the same agent session that watched this review.
-async function resume(review) {
+// claim: page click relayed by service; first VS Code window wins.
+async function resume(review, claim = false) {
   if (!/^[A-Za-z0-9_-]+$/.test(review)) return;
   let target;
   try {
-    const r = await fetch(`${base()}/api/reviews/${review}/resume`, {signal: AbortSignal.timeout(5000)});
-    target = await r.json();
-    if (!r.ok) throw Error(target.error || `HTTP ${r.status}`);
+    if (claim) target = await post(`/api/reviews/${review}/resume`, {action: 'claim'});
+    else {
+      const r = await fetch(`${base()}/api/reviews/${review}/resume`, {signal: AbortSignal.timeout(5000)});
+      target = await r.json();
+      if (!r.ok) throw Error(target.error || `HTTP ${r.status}`);
+    }
   } catch (e) { vscode.window.showErrorMessage(`PrePR: cannot resume agent: ${e.message}`); return; }
+  if (claim && target.status !== 'claimed') return;
+  // Page shows why nothing started. No-op once the watcher attached.
+  const report = message => {
+    if (target.request) post(`/api/reviews/${review}/resume`, {action: 'fail', request: target.request, error: message.slice(0, 500)}).catch(() => {});
+  };
+  const fail = (message, showLog) => {
+    log?.info(`[${review}] ${message}`);
+    vscode.window.showErrorMessage(`PrePR: ${message}`, ...(showLog ? ['Show log'] : [])).then(p => p && log?.show());
+    report(message);
+  };
   if (target.active) { vscode.window.showInformationMessage(`PrePR: ${target.author} is already watching.`); return; }
   if (resuming.has(review)) { vscode.window.showInformationMessage(`PrePR: watcher is already starting.`); return; }
   let prompt;
@@ -149,22 +170,23 @@ async function resume(review) {
     fs.writeFileSync(contextFile, JSON.stringify({url: base(), review: saved, manifestFile, stateFile}, null, 2) + '\n', {mode: 0o600});
     target = {...target, roots: [...target.roots, directory]};
     prompt = resumePrompt(review, target, contextFile, stateFile);
-  } catch (e) { vscode.window.showErrorMessage(`PrePR: cannot save review context: ${e.message}`); return; }
+  } catch (e) { fail(`cannot save review context: ${e.message}`); return; }
   if (target.agent === 'claude') {
     const q = new URLSearchParams({session: target.session, prompt}).toString();
     log?.info(`Resume ${review}: Claude Code session ${target.session}`);
-    await vscode.env.openExternal(vscode.Uri.parse(`${vscode.env.uriScheme}://anthropic.claude-code/open?${q}`));
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(`${vscode.env.uriScheme}://anthropic.claude-code/open?${q}`));
+    if (opened === false) fail('cannot open the Claude Code session.');
     return;
   }
-  if (target.agent !== 'codex') return;
+  if (target.agent !== 'codex') { fail(`unknown agent ${JSON.stringify(target.agent)}.`); return; }
   const cwd = target.cwd && path.isAbsolute(target.cwd) && fs.existsSync(target.cwd) ? target.cwd : undefined;
-  if (!cwd) { vscode.window.showErrorMessage('PrePR: review working directory is unavailable.'); return; }
+  if (!cwd) { fail('review working directory is unavailable.'); return; }
   const bin = vscode.workspace.getConfiguration('prepr').get('codexPath', 'codex');
   function launch(session) {
     log?.info(`${review}: codex exec${session ? ' resume ' + session : ''} (cwd ${cwd})`);
     let child, output = '', started = false;
     try { child = cp.spawn(bin, codexArgs({...target, session}, prompt), {cwd, stdio: ['ignore', 'pipe', 'pipe']}); }
-    catch (e) { vscode.window.showErrorMessage(`PrePR: cannot start Codex: ${e.message}`); return; }
+    catch (e) { fail(`cannot start Codex: ${e.message}`); return; }
     resuming.set(review, child);
     const line = chunk => {
       output = (output + String(chunk)).slice(-65536);
@@ -172,7 +194,7 @@ async function resume(review) {
       String(chunk).split('\n').filter(Boolean).forEach(l => log?.info(`[${review}] ${l}`));
     };
     child.stdout.on('data', line); child.stderr.on('data', line);
-    child.on('error', e => { resuming.delete(review); vscode.window.showErrorMessage(`PrePR: cannot start Codex (${e.message}). Set prepr.codexPath.`); });
+    child.on('error', e => { resuming.delete(review); fail(`cannot start Codex (${e.message}). Set prepr.codexPath.`); });
     child.on('exit', code => {
       resuming.delete(review);
       log?.info(`[${review}] Codex exited ${code}`);
@@ -180,12 +202,28 @@ async function resume(review) {
         log?.info(`[${review}] Saved session unavailable; starting with review context.`);
         launch(''); return;
       }
-      if (code) vscode.window.showErrorMessage(`PrePR: watcher exited with code ${code}.`, 'Show log').then(p => p && log?.show());
+      if (code) fail(`watcher exited with code ${code}.`, true);
+      else report('Codex ended without attaching to the review.');
     });
   }
   launch(target.session);
   vscode.window.showInformationMessage('PrePR: starting review watcher in background.', 'Show log').then(p => p && log?.show());
 }
+
+// Page clicks wait in the service: built-in and external browsers cannot reach this host directly.
+let polling = false, pollTimer = null, stopped = false;
+async function poll() {
+  if (polling) return false;
+  polling = true;
+  try {
+    const r = await fetch(`${base()}/api/resume-requests`, {signal: AbortSignal.timeout(3000)});
+    if (!r.ok) return false;
+    for (const review of (await r.json()).reviews || []) if (typeof review === 'string') await resume(review, true);
+    return true;
+  } catch { return false; } finally { polling = false; }
+}
+// Service down: slow retry.
+function schedule(delay) { if (!stopped) pollTimer = setTimeout(async () => schedule(await poll() ? 2000 : 10000), delay); }
 
 async function pickReview() {
   let reviews;
@@ -228,8 +266,9 @@ function activate(context) {
       p.webview.html = html(p.webview, src);
     }}),
   );
+  stopped = false; schedule(1000);
 }
 
-function deactivate() { for (const child of resuming.values()) child.kill(); }
+function deactivate() { stopped = true; clearTimeout(pollTimer); for (const child of resuming.values()) child.kill(); }
 
-module.exports = {activate, deactivate, pagePath, html, keyOf, codexArgs, resumePrompt};
+module.exports = {activate, deactivate, pagePath, html, keyOf, codexArgs, resumePrompt, poll};

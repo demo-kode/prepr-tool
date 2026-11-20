@@ -18,13 +18,16 @@ const vscode={
 const {EventEmitter}=require('node:events');calls.spawned=[];
 const fakeCp={spawn:(bin,args,opts)=>{const c=new EventEmitter();c.stdout=new EventEmitter();c.stderr=new EventEmitter();c.kill=()=>{};calls.spawned.push({bin,args,opts,c});return c;}};
 const load=Module._load;Module._load=function(req,...a){return req==='vscode'?vscode:req==='child_process'?fakeCp:load.call(this,req,...a);};
-let healthy=true,targets={};global.fetch=async url=>{if(!healthy)throw Error('down');const m=String(url).match(/\/api\/reviews\/([^/]+)\/resume$/);
+let healthy=true,targets={},pending=[],claims={};const posts=[];global.fetch=async(url,init)=>{if(!healthy)throw Error('down');const m=String(url).match(/\/api\/reviews\/([^/]+)\/resume$/);
+ if(String(url).endsWith('/api/resume-requests'))return{ok:true,json:async()=>({reviews:pending})};
+ if(m&&init?.method==='POST'){const body=JSON.parse(init.body);posts.push({review:m[1],...body});return{ok:true,json:async()=>body.action==='claim'?(claims[m[1]]||{status:'none'}):{status:'failed'}};}
  if(m)return targets[m[1]]?{ok:true,json:async()=>targets[m[1]]}:{ok:false,status:400,json:async()=>({error:'Agent session not recorded'})};
  return{ok:true,json:async()=>[{id:'done',title:'Done',decision:{status:'closed'}},{id:'live',title:'Live',openThreads:2}]};};
 const ext=require('../vscode/extension.js');
 const fs=require('node:fs'),path=require('node:path'),storage=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'prepr-extension-'));
 (async()=>{
   ext.activate({subscriptions:[],extensionUri:{s:'/ext'},globalStorageUri:{fsPath:storage}});
+  ext.deactivate(); // Stop background timer; test drives poll() itself.
   assert.deepEqual(Object.keys(calls.commands).sort(),['prepr.open','prepr.openReview']);
   assert.equal(calls.status.shown,true);assert.equal(calls.status.command,'prepr.openReview');assert.match(calls.log,/PrePR activated/);
   await uriHandler.handleUri({query:'review=search-timeout&snapshot=4'});
@@ -94,6 +97,24 @@ const fs=require('node:fs'),path=require('node:path'),storage=fs.mkdtempSync(pat
   calls.spawned.at(-1).c.stderr.emit('data','No session found');calls.spawned.at(-1).c.emit('exit',1);assert.equal(calls.spawned.length,4);
   await uriHandler.handleUri({path:'/resume',query:'review=cx'});const auth=calls.spawned.at(-1);auth.c.stderr.emit('data','Authentication failed');auth.c.emit('exit',1);assert.equal(calls.spawned.length,5);
   await uriHandler.handleUri({path:'/resume',query:'review=cx'});const started=calls.spawned.at(-1);started.c.stdout.emit('data','{"type":"thread.started"}\n');started.c.stderr.emit('data','session not found');started.c.emit('exit',1);assert.equal(calls.spawned.length,6);
+  // Page click relayed by service: poll claims, launches same way, reports failure to page.
+  pending=['relay'];claims.relay={...targets.cx,status:'claimed',request:'r1'};const before=calls.spawned.length;
+  assert.equal(await ext.poll(),true);assert.equal(calls.spawned.length,before+1);assert.deepEqual(posts.at(-1),{review:'relay',action:'claim'});
+  const relay=calls.spawned.at(-1);assert.deepEqual(relay.args.slice(0,2),['exec','resume']);
+  relay.c.stderr.emit('data','Authentication failed');relay.c.emit('exit',1);
+  assert.deepEqual(posts.at(-1),{review:'relay',action:'fail',request:'r1',error:'watcher exited with code 1.'});assert.match(calls.errors.at(-1),/watcher exited with code 1/);
+  // Clean exit without attaching: page told, no error popup. Attached watcher makes service ignore it.
+  const quiet=calls.errors.length;await ext.poll();calls.spawned.at(-1).c.emit('exit',0);
+  assert.equal(posts.at(-1).error,'Codex ended without attaching to the review.');assert.equal(calls.errors.length,quiet);
+  // Other window claimed first, bad ID, service down: nothing starts.
+  pending=['lost','bad id'];const count=calls.spawned.length,claimsSent=posts.length;assert.equal(await ext.poll(),true);
+  assert.equal(calls.spawned.length,count);assert.equal(posts.length,claimsSent+1);assert.equal(calls.errors.length,quiet);
+  healthy=false;assert.equal(await ext.poll(),false);healthy=true;
+  // Launch problem after claim reaches page too.
+  pending=['gone'];claims.gone={...targets.cx,cwd:'/no/such/dir',status:'claimed',request:'r2'};await ext.poll();
+  assert.deepEqual(posts.at(-1),{review:'gone',action:'fail',request:'r2',error:'review working directory is unavailable.'});
+  // Direct host paths (old open tabs) report nothing: no request to answer.
+  const direct=posts.length;await uriHandler.handleUri({path:'/resume',query:'review=cx'});calls.spawned.at(-1).c.emit('exit',1);assert.equal(posts.length,direct);
   fs.rmSync(storage,{recursive:true,force:true});
-  console.log('PASS: VS Code extension resume (Codex background, Claude conversation, guards), status button, activation log, commands, URI handler, one tab per review, reveal/re-key, snapshot navigation, title, external links, unreachable service, restore.');
+  console.log('PASS: VS Code extension resume (Codex background, Claude conversation, guards), relayed page clicks (claim, failure report), status button, activation log, commands, URI handler, one tab per review, reveal/re-key, snapshot navigation, title, external links, unreachable service, restore.');
 })().catch(e=>{console.error(e);process.exit(1)});

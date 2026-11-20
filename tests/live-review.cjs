@@ -13,6 +13,11 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.equal(await page.getByRole('button',{name:'Run agent',exact:true}).count(),0);
  assert.equal(await page.locator('#agent-settings').count(),0);
+ // Plain browser tab, no VS Code host answering: click stays on page and says why nothing started.
+ await page.getByRole('button',{name:'Start watching',exact:true}).click();
+ await page.getByText('Starting watcher · waiting for VS Code…',{exact:true}).waitFor();
+ await page.getByText('VS Code did not answer · open or reload a VS Code window with the PrePR extension, then retry',{exact:true}).waitFor({timeout:20000});
+ assert.equal(await page.getByRole('button',{name:'Start watching',exact:true}).isEnabled(),true);assert.equal(new URL(page.url()).searchParams.get('review'),id);
  await post('/api/reviews/'+id+'/watch',{action:'start',token,author:'Codex',session:'fixture-session'});
  await page.getByText('Codex · working session watching',{exact:true}).waitFor();
  await page.locator('#watcher-indicator.watching').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent watching');
@@ -71,5 +76,5 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.route('**/api/reviews/*/watch',route=>route.abort());
  await page.locator('#watcher-indicator').getByText('Status unavailable',{exact:true}).waitFor();
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
- assert.deepEqual(errors,[]);console.log('PASS: live replies/drafts, agent activity badges/LED, snapshot updates, Close archives to Completed, delete, PR submitted token, Ship it, closed comments, pending offline handoff and PR result.');
+ assert.deepEqual(errors,[]);console.log('PASS: unanswered start click explained, live replies/drafts, agent activity badges/LED, snapshot updates, Close archives to Completed, delete, PR submitted token, Ship it, closed comments, pending offline handoff and PR result.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

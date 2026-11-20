@@ -119,7 +119,9 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
   nothing remotely.
   `ship_requested`: leave comment watching, enter Ship it handoff. Both decisions beat pending
   comments; finish in-flight file write safely, then stop review work.
-- Idle review shows **Start watching**, including reviews with no registered session. Host resumes
+- Idle review shows **Start watching**, including reviews with no registered session. Click waits
+  in the service up to 30 seconds; first VS Code window with the extension claims it. No window:
+  page says VS Code did not answer; launch failure: page shows the reason. Host resumes
   saved Codex/Claude session; absent session starts `codex exec` with saved review context. A missing
   Codex session falls back once, before any thread starts; other failures show an error.
 - Host saves context, manifest and watcher state in VS Code extension storage. New session reads

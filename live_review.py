@@ -17,6 +17,8 @@ def init(db):
         db.execute("ALTER TABLE review_watchers ADD COLUMN agent TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE review_watchers ADD COLUMN cwd TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE review_watchers ADD COLUMN roots TEXT NOT NULL DEFAULT '[]'")
+    # Start watching click, relayed to VS Code host. One per review.
+    db.execute("CREATE TABLE IF NOT EXISTS review_starts(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, requested REAL NOT NULL, claimed REAL, error TEXT NOT NULL DEFAULT '')")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
     # Keep renamed Close: migrate old rows.
     db.execute("UPDATE review_decisions SET action='close' WHERE action='keep'")
@@ -49,7 +51,7 @@ def remove(db, rid):
     db.execute(f'DELETE FROM messages WHERE thread_id IN (SELECT id FROM threads WHERE snapshot_id IN ({snaps}))', (rid,))
     for table in ('threads', 'viewed'): db.execute(f'DELETE FROM {table} WHERE snapshot_id IN ({snaps})', (rid,))
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    for table in ('review_decisions', 'review_watchers', 'agent_jobs'):
+    for table in ('review_decisions', 'review_watchers', 'review_starts', 'agent_jobs'):
         if table in tables: db.execute(f'DELETE FROM {table} WHERE review_id=?', (rid,))
     db.execute('DELETE FROM snapshots WHERE review_id=?', (rid,))
     db.execute('DELETE FROM reviews WHERE id=?', (rid,))
@@ -130,6 +132,54 @@ def resume_target(db, rid):
             'review': {'id': rid, 'title': payload.get('title', rid), 'description': payload.get('description', ''), 'repos': repos}}
 
 
+# Host must answer within ANSWER seconds; claim stays open until CLAIM.
+START_ANSWER, START_CLAIM, START_LAUNCH, START_SHOWN = 10, 30, 300, 900
+
+
+def start_status(db, rid):
+    # Page view of last Start watching click. No session IDs.
+    row = db.execute('SELECT * FROM review_starts WHERE review_id=?', (rid,)).fetchone()
+    if row is None: return None
+    now = time.time()
+    if row['error']: return {'status': 'failed', 'error': row['error']} if now-row['requested'] < START_SHOWN else None
+    if row['claimed'] is not None: return {'status': 'starting'} if now-row['claimed'] < START_LAUNCH else None
+    if now-row['requested'] < START_ANSWER: return {'status': 'requested'}
+    return {'status': 'unanswered'} if now-row['requested'] < START_SHOWN else None
+
+
+def pending_starts(db):
+    # Unclaimed fresh clicks. Host polls this.
+    return {'reviews': [row[0] for row in db.execute('SELECT review_id FROM review_starts WHERE claimed IS NULL AND error=\'\' AND requested>? ORDER BY requested', (time.time()-START_CLAIM,))]}
+
+
+def start(db, rid, data):
+    # Serialize click, claim and failure report.
+    db.execute('UPDATE reviews SET updated=updated WHERE id=?', (rid,))
+    action = data.get('action')
+    if action == 'request':
+        target = resume_target(db, rid)
+        if target['active']: raise ValueError(f"{target['author']} is already watching")
+        db.execute("INSERT OR REPLACE INTO review_starts(review_id,id,requested,claimed,error) VALUES(?,?,?,NULL,'')", (rid, uuid.uuid4().hex, time.time()))
+        return start_status(db, rid)
+    row = db.execute('SELECT * FROM review_starts WHERE review_id=?', (rid,)).fetchone()
+    if action == 'claim':
+        # First host wins; stale clicks never launch an agent.
+        if row is None or row['claimed'] is not None or row['error'] or row['requested'] <= time.time()-START_CLAIM: return {'status': 'none'}
+        target = resume_target(db, rid)
+        if target['active']:
+            db.execute('DELETE FROM review_starts WHERE review_id=?', (rid,))
+            return {'status': 'none'}
+        db.execute('UPDATE review_starts SET claimed=? WHERE review_id=?', (time.time(), rid))
+        return {**target, 'status': 'claimed', 'request': row['id']}
+    if action == 'fail':
+        error = data.get('error', '')
+        if not isinstance(error, str) or not 1 <= len(error.strip()) <= 500: raise ValueError('Invalid start error')
+        if row is None or row['id'] != data.get('request'): return {'status': 'none'}
+        db.execute('UPDATE review_starts SET error=? WHERE review_id=?', (error.strip(), rid))
+        return start_status(db, rid)
+    raise ValueError('Invalid start action')
+
+
 def resume_info(data):
     # Validate resume fields; empty when agent unknown.
     agent, session, cwd, roots = data.get('agent', ''), data.get('session', ''), data.get('cwd', ''), data.get('roots', [])
@@ -164,6 +214,7 @@ def watch(db, rid, data):
         if not isinstance(session, str) or len(session)>200: raise ValueError('Invalid session reference')
         agent, cwd, roots = resume_info(data)
         db.execute("INSERT OR REPLACE INTO review_watchers(review_id,token,author,session,updated,stopped,activity,activity_threads,agent,cwd,roots) VALUES(?,?,?,?,?,0,'idle','[]',?,?,?)", (rid,token,author.strip(),session,time.time(),agent,cwd,roots))
+        db.execute('DELETE FROM review_starts WHERE review_id=?', (rid,))
     elif action in ('heartbeat', 'activity'):
         if row is None or row['token'] != token: return {'status': 'replaced'}
         closed = decision(db,rid)

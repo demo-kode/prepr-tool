@@ -2,7 +2,7 @@
   "name": "prepr",
   "displayName": "PrePR",
   "description": "Review agent changes before the pull request, in a slicker VS Code tab.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "demo-kode",
   "icon": "media/icon.png",
   "galleryBanner": {

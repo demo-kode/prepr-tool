@@ -1,13 +1,21 @@
 'use strict';
 (() => {
-  let refreshing=false,watchedReview=null,lastCheck=0,resumedAt=0;
-  // Host resumes saved session or starts Codex with review context.
-  function resumeButton(rid,author){
-    const b=btn('Start watching',()=>{resumedAt=Date.now();b.disabled=true;setTimeout(()=>{b.disabled=false;},15000);
-      if(embedded)hostPost({type:'prepr:resume',review:rid});else location.href='vscode://demo-kode.prepr/resume?review='+encodeURIComponent(rid);
-      toast('Starting review watcher…');},'primary resume-agent');
-    const remaining=Math.max(0,15000-(Date.now()-resumedAt));b.disabled=remaining>0;
-    if(remaining)setTimeout(()=>{b.disabled=false;},remaining);return b;
+  let refreshing=false,watchedReview=null,lastCheck=0;
+  // Click goes to service; VS Code host polls it. Works in any browser, no vscode:// link.
+  function resumeButton(rid){
+    const b=btn('Start watching',async()=>{b.disabled=true;
+      try{await api('/api/reviews/'+rid+'/resume',{action:'request'});toast('Starting review watcher…');await refresh();}
+      catch(e){b.disabled=false;throw e;}},'primary resume-agent');
+    return b;
+  }
+  // Start progress, or button with reason last click went nowhere.
+  function startControls(rid,author,start){
+    if(start?.status==='requested')return[el('span','','Starting watcher · waiting for VS Code…')];
+    if(start?.status==='starting')return[el('span','',`Starting ${author}…`)];
+    const nodes=[];
+    if(start?.status==='unanswered')nodes.push(el('span','agent-away','VS Code did not answer · open or reload a VS Code window with the PrePR extension, then retry'));
+    if(start?.status==='failed')nodes.push(el('span','agent-away','Watcher did not start · '+start.error));
+    nodes.push(resumeButton(rid));return nodes;
   }
   function indicator(active,label,description,working=false){
     const node=document.querySelector('#watcher-indicator');node.classList.toggle('watching',active&&!working);node.classList.toggle('working',active&&working);node.title=description;
@@ -51,14 +59,14 @@
         const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
         if(d.result)holder.append(el('span','',d.result));
-        if(canStart&&['requested','preparing'].includes(d.status))holder.append(resumeButton(rid,w0?.author||'Codex'));
+        if(canStart&&['requested','preparing'].includes(d.status))holder.append(...startControls(rid,w0?.author||'Codex',result.start));
         return;
       }
-      if(!result.watcher){holder.append(resumeButton(rid,'Codex'));return;}
+      if(!result.watcher){holder.append(...startControls(rid,'Codex',result.start));return;}
       if(result.watcher.active){
         holder.append(el('span','',`${result.watcher.author} · ${result.watcher.activity==='idle'?'working session watching':result.watcher.activity==='code'?'changing code':'writing replies'}`));
       }else{
-        holder.append(el('span',waiting?'agent-away':'',waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`),resumeButton(rid,w0.author));
+        holder.append(el('span',waiting?'agent-away':'',waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`),...startControls(rid,w0.author,result.start));
       }
       if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
     }catch(e){if(holder.isConnected){holder.textContent=e.message;indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}

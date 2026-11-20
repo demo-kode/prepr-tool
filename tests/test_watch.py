@@ -123,6 +123,46 @@ class WatchTests(unittest.TestCase):
         self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
         self.assertEqual(self.api('/api/reviews/demo/resume')['decision']['status'],'requested')
 
+    def test_start_click_relays_to_first_host(self):
+        # Page click waits in service; host claims once; page sees progress.
+        watch=lambda:self.api('/api/reviews/demo/watch')['start']
+        self.assertIsNone(watch());self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]})
+        self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'request'}),{'status':'requested'})
+        self.assertEqual(self.api('/api/resume-requests'),{'reviews':['demo']});self.assertEqual(watch(),{'status':'requested'})
+        claimed=self.api('/api/reviews/demo/resume',{'action':'claim'})
+        self.assertEqual((claimed['status'],claimed['agent'],claimed['session'],claimed['review']['id']),('claimed','codex','','demo'))
+        self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'claim'}),{'status':'none'})
+        self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]});self.assertEqual(watch(),{'status':'starting'})
+        self.assertNotIn('session',json.dumps(self.api('/api/reviews/demo/watch')))
+        # Host failure reaches page; wrong request ID ignored.
+        self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'fail','request':'other','error':'x'}),{'status':'none'})
+        self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'fail','request':claimed['request'],'error':'watcher exited with code 1.'}),{'status':'failed','error':'watcher exited with code 1.'})
+        self.assertEqual(watch()['status'],'failed')
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/resume',{'action':'fail','request':claimed['request'],'error':''})
+        with self.assertRaises(ValueError):self.api('/api/reviews/demo/resume',{'action':'other'})
+        # Retry click replaces failure; attached watcher clears it.
+        self.api('/api/reviews/demo/resume',{'action':'request'});retry=self.api('/api/reviews/demo/resume',{'action':'claim'})
+        self.assertNotEqual(retry['request'],claimed['request']);self.start();self.assertIsNone(watch())
+        self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'fail','request':retry['request'],'error':'late'}),{'status':'none'})
+        with self.assertRaisesRegex(ValueError,'already watching'):self.api('/api/reviews/demo/resume',{'action':'request'})
+    def test_start_click_unanswered_then_expires(self):
+        # No VS Code host: page says so; old click never launches an agent later.
+        self.api('/api/reviews/demo/resume',{'action':'request'});now=time.time()
+        with mock.patch.object(live_review.time,'time',return_value=now+live_review.START_ANSWER+1):
+            self.assertEqual(self.api('/api/reviews/demo/watch')['start'],{'status':'unanswered'})
+            self.assertEqual(self.api('/api/resume-requests'),{'reviews':['demo']})
+        with mock.patch.object(live_review.time,'time',return_value=now+live_review.START_CLAIM+1):
+            self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]})
+            self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'claim'}),{'status':'none'})
+            self.assertEqual(self.api('/api/reviews/demo/watch')['start'],{'status':'unanswered'})
+        with mock.patch.object(live_review.time,'time',return_value=now+live_review.START_SHOWN+1):
+            self.assertIsNone(self.api('/api/reviews/demo/watch')['start'])
+        # Completed review: no start; delete drops the click.
+        self.api('/api/reviews/demo/resume',{'action':'request'})
+        self.api('/api/reviews/demo/decision',{'action':'close','snapshot':self.sid})
+        with self.assertRaisesRegex(ValueError,'completed'):self.api('/api/reviews/demo/resume',{'action':'request'})
+        review.api(self.url,'/api/reviews/demo',{},'DELETE')
+        self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]})
     def test_completed_review_cannot_start_session(self):
         self.api('/api/reviews/demo/decision',{'action':'close'})
         with self.assertRaisesRegex(ValueError,'completed'):self.api('/api/reviews/demo/resume')

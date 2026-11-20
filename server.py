@@ -257,10 +257,12 @@ class Handler(BaseHTTPRequestHandler):
             return live_review.decide(db,decision_match[1],data)
         resume_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/resume', path)
         if resume_match and method == 'GET': return live_review.resume_target(db, resume_match[1])
+        if resume_match and method == 'POST': return live_review.start(db, resume_match[1], data)
+        if method == 'GET' and path == '/api/resume-requests': return live_review.pending_starts(db)
         watch_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/watch', path)
         if watch_match:
             if method == 'POST': return live_review.watch(db, watch_match[1], data)
-            if method == 'GET': return {'watcher': live_review.watcher(db, watch_match[1]),'decision':live_review.decision(db,watch_match[1])}
+            if method == 'GET': return {'watcher': live_review.watcher(db, watch_match[1]),'decision':live_review.decision(db,watch_match[1]),'start':live_review.start_status(db,watch_match[1])}
         if method == 'GET' and path == '/api/health':
             return {'ok': True}
         assets = {

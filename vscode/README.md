@@ -13,6 +13,10 @@ Click **Start watching** on an idle review. PrePR resumes the saved session or s
 with the review context automatically. The indicator turns green when the agent attaches.
 Startup output appears in the **PrePR** log.
 
+The click works from any tab showing the review, also VS Code's built-in browser or an external
+one: the extension checks the local service every 2 seconds for clicks and the first window
+answers. After updating the extension run **Developer: Reload Window**.
+
 One tab per review, so parallel tasks sit side by side. Opening a review again brings its tab
 forward. Tabs come back after a restart.
 Outside links open in your browser.

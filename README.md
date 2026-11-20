@@ -76,7 +76,11 @@ them (trash icon).
 
 Click **Start watching** to connect an agent. PrePR resumes its saved session or starts Codex
 with the review context when no session is available. No prompt copying or session setup.
-The indicator turns green when the agent attaches. VS Code's **PrePR** output shows startup errors.
+Works from any tab: VS Code panel, VS Code built-in browser, external browser. The click waits in
+the service; an open VS Code window with the PrePR extension picks it up within seconds. No window
+answers: page says so; open or reload VS Code and retry.
+The indicator turns green when the agent attaches. Startup errors show on the page and in VS Code's
+**PrePR** output.
 No live watch also works: tell agent to read feedback when done commenting.
 
 ## Page
