@@ -12,6 +12,11 @@ def init(db):
     if 'activity' not in columns:
         db.execute("ALTER TABLE review_watchers ADD COLUMN activity TEXT NOT NULL DEFAULT 'idle'")
         db.execute("ALTER TABLE review_watchers ADD COLUMN activity_threads TEXT NOT NULL DEFAULT '[]'")
+    # Resume info: agent kind, session, working dir, writable roots.
+    if 'agent' not in columns:
+        db.execute("ALTER TABLE review_watchers ADD COLUMN agent TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE review_watchers ADD COLUMN cwd TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE review_watchers ADD COLUMN roots TEXT NOT NULL DEFAULT '[]'")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
     # Keep renamed Close: migrate old rows.
     db.execute("UPDATE review_decisions SET action='close' WHERE action='keep'")
@@ -101,8 +106,39 @@ def watcher(db, rid):
     row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
     if row is None: return None
     active = not row['stopped'] and row['updated'] > time.time()-120 and not decision(db,rid)
+    resumable = row['agent'] in ('codex', 'claude') and bool(row['session'])
     return {'author': row['author'], 'active': active, 'activity': row['activity'] if active else 'idle',
-            'threads': json.loads(row['activity_threads']) if active else []}
+            'threads': json.loads(row['activity_threads']) if active else [], 'agent': row['agent'], 'resumable': resumable}
+
+
+def resume_target(db, rid):
+    # Host starts or resumes; page never receives session IDs.
+    snapshot = db.execute('SELECT payload FROM snapshots WHERE review_id=? ORDER BY id DESC LIMIT 1', (rid,)).fetchone()
+    if snapshot is None: raise LookupError('Review not found')
+    closed = decision(db, rid)
+    if closed and closed['status'] not in ('requested', 'preparing'): raise ValueError('Review already completed')
+    payload = json.loads(snapshot['payload'])
+    repos = [{k:r[k] for k in ('name', 'source', 'branch', 'base', 'include', 'exclude') if k in r} for r in payload['repos']]
+    roots = list(dict.fromkeys(r['source'] for r in repos if r.get('source', '').startswith('/')))
+    if not roots: raise ValueError('Review has no local repository paths')
+    row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
+    saved = row is not None and row['agent'] in ('codex', 'claude') and bool(row['session'])
+    return {'author': row['author'] if saved else 'Codex', 'agent': row['agent'] if saved else 'codex',
+            'session': row['session'] if saved else '', 'cwd': row['cwd'] if saved and row['cwd'] else roots[0],
+            'roots': list(dict.fromkeys(roots + (json.loads(row['roots']) if saved else []))),
+            'active': bool(row is not None and watcher(db, rid)['active']), 'decision': closed,
+            'review': {'id': rid, 'title': payload.get('title', rid), 'description': payload.get('description', ''), 'repos': repos}}
+
+
+def resume_info(data):
+    # Validate resume fields; empty when agent unknown.
+    agent, session, cwd, roots = data.get('agent', ''), data.get('session', ''), data.get('cwd', ''), data.get('roots', [])
+    if agent not in ('', 'codex', 'claude'): raise ValueError('Invalid agent')
+    if agent and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{7,99}', session or ''): raise ValueError('Invalid session reference')
+    path = lambda p: isinstance(p, str) and p.startswith('/') and len(p) <= 500 and '\0' not in p
+    if cwd and not path(cwd): raise ValueError('Invalid working directory')
+    if not isinstance(roots, list) or len(roots) > 20 or not all(path(r) for r in roots): raise ValueError('Invalid writable roots')
+    return agent, cwd, json.dumps(roots)
 
 
 def watch(db, rid, data):
@@ -126,7 +162,8 @@ def watch(db, rid, data):
         author, session = data.get('author', ''), data.get('session', '')
         if not isinstance(author, str) or not 1 <= len(author.strip()) <= 100: raise ValueError('Invalid watcher author')
         if not isinstance(session, str) or len(session)>200: raise ValueError('Invalid session reference')
-        db.execute("INSERT OR REPLACE INTO review_watchers(review_id,token,author,session,updated,stopped,activity,activity_threads) VALUES(?,?,?,?,?,0,'idle','[]')", (rid,token,author.strip(),session,time.time()))
+        agent, cwd, roots = resume_info(data)
+        db.execute("INSERT OR REPLACE INTO review_watchers(review_id,token,author,session,updated,stopped,activity,activity_threads,agent,cwd,roots) VALUES(?,?,?,?,?,0,'idle','[]',?,?,?)", (rid,token,author.strip(),session,time.time(),agent,cwd,roots))
     elif action in ('heartbeat', 'activity'):
         if row is None or row['token'] != token: return {'status': 'replaced'}
         closed = decision(db,rid)

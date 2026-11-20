@@ -16,15 +16,26 @@ def save(path, state):
     temporary.replace(path)
 
 
+def agent_session():
+    # Detect running agent and its session ID.
+    if os.environ.get('CODEX_THREAD_ID'): return 'codex', os.environ['CODEX_THREAD_ID']
+    if os.environ.get('CLAUDE_CODE_SESSION_ID'): return 'claude', os.environ['CLAUDE_CODE_SESSION_ID']
+    return '', ''
+
+
 def start(api, url, rid, path, author, session=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', rid): raise ValueError('Invalid review ID')
     path = Path(path)
     previous = json.loads(path.read_text()) if path.exists() else {}
     if previous and (previous['review'] != rid or previous['url'] != url):
         raise ValueError('Use a separate watcher state file for each review and server')
+    agent, detected = agent_session()
     state = {**previous, 'review': rid, 'url': url, 'author': author, 'token': uuid.uuid4().hex,
-             'session': session or os.environ.get('CODEX_THREAD_ID', ''), 'seen': previous.get('seen', {})}
-    result=api(url, '/api/reviews/'+rid+'/watch', {'action':'start', **{k:state[k] for k in ['token','author','session']}})
+             'session': session or detected, 'seen': previous.get('seen', {})}
+    # Resume info lets PrePR wake this same session later.
+    resume = {'agent': agent if state['session'] == detected and detected else '', 'cwd': os.getcwd(),
+              'roots': [str(path.resolve().parent)]}
+    result=api(url, '/api/reviews/'+rid+'/watch', {'action':'start', **{k:state[k] for k in ['token','author','session']}, **resume})
     save(path, state)
     return {**result, 'review':rid, 'url':url+'/?review='+rid}
 

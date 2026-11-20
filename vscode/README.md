@@ -9,6 +9,10 @@ Same PrePR page (Files, Commits, Discussion, Close, Ship it), in a slicker VS Co
 - Or run **PrePR: Open review…** / **PrePR: Show all reviews** from the Command Palette.
 - Agents open reviews for you: `vscode://demo-kode.prepr/open?review=ID`.
 
+Click **Start watching** on an idle review. PrePR resumes the saved session or starts Codex
+with the review context automatically. The indicator turns green when the agent attaches.
+Startup output appears in the **PrePR** log.
+
 One tab per review, so parallel tasks sit side by side. Opening a review again brings its tab
 forward. Tabs come back after a restart.
 Outside links open in your browser.

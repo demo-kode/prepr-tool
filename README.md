@@ -74,7 +74,9 @@ PRs sent from chat instead of **Ship it**: agent runs `review.py mark-sent ID --
 Home page: **Active** and **Completed** tabs. Completed reviews stay archived until you delete
 them (trash icon).
 
-Watching needs agent session alive. Session ended? Ask same agent to resume.
+Click **Start watching** to connect an agent. PrePR resumes its saved session or starts Codex
+with the review context when no session is available. No prompt copying or session setup.
+The indicator turns green when the agent attaches. VS Code's **PrePR** output shows startup errors.
 No live watch also works: tell agent to read feedback when done commenting.
 
 ## Page

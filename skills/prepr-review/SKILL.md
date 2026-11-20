@@ -30,8 +30,9 @@ README has manifest fields and startup commands.
   twice. Decline: review stays available, no open, no monitoring.
 - Accepted: start watcher (below), then `python3 review.py open REVIEW_ID`: VS Code tab when
   extension installed, else default browser. Open fails: report it, give URL.
-- Stay in current conversation, same context and model. Answer each comment in its own PrePR
-  thread. Never spawn another agent, CLI, chat or fork. Watcher only delivers feedback; runs no model.
+- Stay in current conversation. Answer each comment in its own PrePR thread. Never fork yourself
+  to watch. User's **Start watching** click lets the host resume the saved session or start Codex
+  with review context when no session is available. The watcher itself runs no model.
 
 ## Publish
 
@@ -88,8 +89,10 @@ python3 review.py watch-start REVIEW_ID --state /path/to/.local/watch.json --aut
 python3 review.py watch --state /path/to/.local/watch.json --timeout 45
 ```
 
-- `watch-start` records review ownership. Codex session ID auto-detected when available; other
-  agents may pass `--session ID`. Reference identifies owner only; never resumes a CLI.
+- `watch-start` records review ownership. Run it from task working dir. Codex
+  (`CODEX_THREAD_ID`) and Claude Code (`CLAUDE_CODE_SESSION_ID`) sessions auto-detected with
+  working dir and state-file dir, so PrePR can resume this same session. Other agents may pass
+  `--session ID` (owner reference only; not resumable).
 - `watch` polls local API/DB. Returns new or changed open threads with original anchors, earlier
   snapshots included. No new comments: `waiting`; repeat while review active.
 - `comments` batch: read context, answer, make requested scoped fixes, test, reply with
@@ -116,8 +119,18 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
   nothing remotely.
   `ship_requested`: leave comment watching, enter Ship it handoff. Both decisions beat pending
   comments; finish in-flight file write safely, then stop review work.
-- Session terminated: monitoring needs explicit restart from working conversation. Never claim a
-  shell watcher wakes a finished agent or recovers context from another session.
+- Idle review shows **Start watching**, including reviews with no registered session. Host resumes
+  saved Codex/Claude session; absent session starts `codex exec` with saved review context. A missing
+  Codex session falls back once, before any thread starts; other failures show an error.
+- Host saves context, manifest and watcher state in VS Code extension storage. New session reads
+  that context and applicable AGENTS.md, preserves review ID, branches and pinned baselines, then
+  uses the supplied state path. Sandbox includes review worktrees and context directory; local
+  network enabled. No new permissions to push, merge or deploy come from starting a watcher.
+- Start prompt received (`PrePR review ID: ...`): `watch-start` with supplied state file, then handle
+  comments or Ship it as usual. Background Codex run has no chat: answer only in PrePR threads,
+  never ask in chat; unclear request: reply in thread, leave open. No new comment for 30 minutes:
+  `watch-stop` and end, so **Start watching** can wake you again.
+- Never claim a shell watcher wakes a finished agent; only the user's button click does.
 
 ## Ship it handoff
 

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -6,6 +7,7 @@ import threading
 import time
 import subprocess
 import unittest
+from unittest import mock
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -94,6 +96,40 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(review_watch.set_activity(review.api,{**state,'token':'f'*32},'code')['status'],'replaced')
         review_watch.activity(review.api,self.state,'code',[tid]);self.api('/api/reviews/demo/watch',{'action':'stop'})
         self.assertEqual(view()['activity'],'idle')
+
+    def test_resume_target_recorded_from_agent_env(self):
+        with mock.patch.dict(os.environ,{'CODEX_THREAD_ID':'0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee','CLAUDE_CODE_SESSION_ID':''}):
+            review_watch.start(review.api,self.url,'demo',self.state,'Codex')
+        view=self.api('/api/reviews/demo/watch')['watcher']
+        self.assertEqual((view['agent'],view['resumable']),('codex',True));self.assertNotIn('0199aaaa',json.dumps(view))
+        t=self.api('/api/reviews/demo/resume')
+        self.assertEqual((t['agent'],t['session'],t['cwd'],t['roots'],t['active']),('codex','0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee',os.getcwd(),['/demo',str(Path(self.state).resolve().parent)],True))
+        self.api('/api/reviews/demo/watch',{'action':'stop'})
+        with mock.patch.dict(os.environ,{'CODEX_THREAD_ID':'','CLAUDE_CODE_SESSION_ID':'7c75ba72-19b6-4e13-a423-e504f6d4798b'}):
+            review_watch.start(review.api,self.url,'demo',self.state,'Claude Code')
+        self.assertEqual(self.api('/api/reviews/demo/resume')['agent'],'claude')
+        self.api('/api/reviews/demo/watch',{'action':'stop'})
+        with mock.patch.dict(os.environ,{'CODEX_THREAD_ID':'','CLAUDE_CODE_SESSION_ID':''}):
+            review_watch.start(review.api,self.url,'demo',self.state,'Other',session='manual-ref')
+        self.assertFalse(self.api('/api/reviews/demo/watch')['watcher']['resumable'])
+        self.assertEqual(self.api('/api/reviews/demo/resume')['session'],'')
+
+    def test_start_without_session_preserves_review_context(self):
+        t=self.api('/api/reviews/demo/resume')
+        self.assertEqual((t['agent'],t['session'],t['cwd'],t['roots'],t['active']),('codex','','/demo',['/demo'],False))
+        self.assertEqual(t['review']['repos'][0]['base'],'a'*40)
+        self.assertEqual(t['review']['repos'][0]['branch'],'main')
+        self.assertNotIn('files',t['review']['repos'][0])
+        self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
+        self.assertEqual(self.api('/api/reviews/demo/resume')['decision']['status'],'requested')
+
+    def test_completed_review_cannot_start_session(self):
+        self.api('/api/reviews/demo/decision',{'action':'close'})
+        with self.assertRaisesRegex(ValueError,'completed'):self.api('/api/reviews/demo/resume')
+        with self.assertRaises(ValueError):self.api('/api/reviews/missing/resume')
+        self.api('/api/reviews/demo/watch',{'action':'stop'})
+        for bad in [{'agent':'bash','session':'x'*10},{'agent':'codex','session':'../etc'},{'agent':'codex','session':'a'*10,'cwd':'relative'},{'agent':'codex','session':'a'*10,'roots':['/ok','rel']}]:
+            with self.assertRaises(ValueError):self.api('/api/reviews/demo/watch',{'action':'start','token':'c'*32,'author':'X',**bad})
 
     def test_close_archives_then_delete_removes(self):
         tid=self.comment();self.start()

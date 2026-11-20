@@ -2,7 +2,7 @@
   "name": "prepr",
   "displayName": "PrePR",
   "description": "Review agent changes before the pull request, in a slicker VS Code tab.",
-  "version": "0.2.1",
+  "version": "0.3.2",
   "publisher": "demo-kode",
   "icon": "media/icon.png",
   "galleryBanner": {
@@ -57,6 +57,11 @@
           "type": "string",
           "default": "http://127.0.0.1:18744",
           "description": "PrePR service URL."
+        },
+        "prepr.codexPath": {
+          "type": "string",
+          "default": "codex",
+          "description": "Codex CLI used to resume a Codex agent in the background."
         }
       }
     }
