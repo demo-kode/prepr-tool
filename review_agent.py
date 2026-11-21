@@ -1,4 +1,4 @@
-"""Host runner. Watches reviews without a model; starts the agent CLI per comment batch or Ship it."""
+"""Host runner. Watches reviews without a model; keeps one agent CLI session per review for comments and Ship it."""
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -13,6 +13,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import uuid
 
 import review_watch
 
@@ -22,7 +23,12 @@ AUTHORS = {'codex': 'Codex', 'claude': 'Claude Code'}
 MODE = {'codex': ['--approve-for-me', '-c', 'sandbox_workspace_write.network_access=true'],
         'claude': ['--permission-mode', 'auto', '--permission-prompts', 'none']}
 ATTEMPTS = 2    # runs per batch before giving up
-LIMIT = 4       # agent runs at once
+LIMIT = 4       # agent CLIs alive at once
+IDLE = 20       # minutes a waiting CLI stays up with no reviewer activity; setup.json agentIdle
+# Claude takes one message per line on stdin and stays up between turns. Codex runs one turn, then resumes its thread.
+PERSISTENT = {'claude'}
+# Linux: CLI gets SIGTERM when the runner dies, however it dies. Elsewhere: plain exec.
+TIED = 'import ctypes,os,signal,sys\ntry: ctypes.CDLL(None).prctl(1,signal.SIGTERM)\nexcept Exception: pass\nos.execv(sys.argv[1],sys.argv[1:])'
 TICK, BEAT = 2, 20
 TIMEOUT = int(os.environ.get('PREPR_AGENT_TIMEOUT', '3600'))
 CONTEXT_LIMIT = 100000
@@ -84,17 +90,17 @@ def detect():
     return ''
 
 
-def command(cfg, mode=None):
-    # Prompt arrives on stdin. Fresh process each run: no saved session needed.
+def command(cfg, mode=None, session=''):
+    # One conversation per review. session: continue it in a new process.
     mode = MODE[cfg['agent']] if mode is None else mode
     extra = [r for r in cfg['roots'] if r != cfg['cwd']]
     if cfg['agent'] == 'codex':
         argv = [cfg['bin'], 'exec', '--json', '--skip-git-repo-check', *mode, '--cd', cfg['cwd']]
         for root in extra: argv += ['--add-dir', root]
-        return argv + ['-']
-    argv = [cfg['bin'], '--print', '--output-format', 'stream-json', '--verbose', *mode]
+        return argv + (['resume', session] if session else []) + ['-']
+    argv = [cfg['bin'], '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', *mode]
     for root in extra: argv += ['--add-dir', root]
-    return argv
+    return argv + (['--resume', session] if session else [])
 
 
 def attach(api, cfg, takeover=False):
@@ -131,7 +137,9 @@ def enroll(api, url, rid, agent, author, manifest, context, cwd, target):
         private(directory/'context.md', context)
     cfg = {'review': rid, 'url': url.rstrip('/'), 'agent': agent, 'author': author or AUTHORS[agent], 'bin': binary,
            'cwd': str(Path(cwd).resolve()) if cwd and Path(cwd).is_dir() else roots[0], 'roots': roots + [str(directory)],
-           'manifest': str(manifest), 'state': 'watching', 'attempts': 0, 'error': ''}
+           'manifest': str(manifest), 'state': 'watching', 'attempts': 0, 'error': '',
+           # New handoff, new conversation: a CLI still up for the old one is ended.
+           'epoch': uuid.uuid4().hex}
     store(cfg)
     result = attach(api, cfg, takeover=True)
     if result['status'] == 'closed':
@@ -171,8 +179,17 @@ def thread_text(thread, latest):
     return '\n'.join(lines)
 
 
-def header(cfg, spec, context, latest=None):
+def header(cfg, spec, context, latest=None, continued=False):
     rid = cfg['review']
+    if continued:
+        # Same conversation: briefing already there.
+        return f'''More work on PrePR review {rid}. You already hold its briefing: same role ({cfg['author']}, unattended, no chat, nobody reads your final message), same repositories, same task context, same rules.
+- Page: {cfg['url']}/?review={rid}{f"""
+- Latest snapshot: {latest}""" if latest else ''}
+- Manifest: {cfg['manifest']}
+- Watcher state file: {folder(rid)/'watch.json'}
+- CLI: {cli(cfg)}
+'''
     repos = '\n'.join(f'- {r["name"]}: {r["path"]} · branch {r.get("branch", "(unchecked)")} · base {r.get("base", "HEAD")}' for r in spec['repos'])
     return f'''You are {cfg['author']}, the unattended background agent for one PrePR local code review.
 There is no chat and nobody reads your final message. The reviewer only sees PrePR thread replies and recorded results.
@@ -196,12 +213,12 @@ Repositories. Never switch branches, never move the bases:
 '''
 
 
-def comments_prompt(cfg, spec, context, threads, others, latest):
+def comments_prompt(cfg, spec, context, threads, others, latest, continued=False):
     rid, tool, state = cfg['review'], cli(cfg), shlex.quote(str(folder(cfg['review'])/'watch.json'))
     manifest, author = shlex.quote(cfg['manifest']), shlex.quote(cfg['author'])
     blocks = '\n\n'.join(thread_text(t, latest) for t in threads)
     rest = '\n\n'.join(thread_text(t, latest) for t in others) or '(none)'
-    return header(cfg, spec, context, latest) + f'''
+    return header(cfg, spec, context, latest, continued) + f'''
 ## Threads waiting for your answer ({len(threads)})
 {blocks}
 
@@ -215,14 +232,14 @@ def comments_prompt(cfg, spec, context, threads, others, latest):
 4. Code change requested: first `{tool} watch-activity --state {state} --activity code`. Edit in-scope files only, run the relevant checks, commit on the review branch (existing Git identity, one commit per fix round, message like `review: <what changed> (PrePR THREAD_ID)`), then republish with `{tool} publish {manifest}`. Cite the short commit SHA in your reply.
 5. Resolve only threads you fully addressed: `{tool} resolve THREAD_ID`. Unclear request: ask in the thread and leave it open.
 6. Never push, open pull requests, merge or deploy. Leave unrelated edits alone.
-7. Then end. Do not wait or poll for more comments: the runner starts a new run when the reviewer writes again.
+7. Then end your turn. Do not wait or poll for more comments: the runner hands you the next batch when the reviewer writes again.
 '''
 
 
-def ship_prompt(cfg, spec, context, decision, pr):
+def ship_prompt(cfg, spec, context, decision, pr, continued=False):
     tool, state = cli(cfg), shlex.quote(str(folder(cfg['review'])/'watch.json'))
     access = f'{pr.get("platform", "unknown")}: {pr.get("access", "(no access notes)")}' if pr else '(not recorded: derive from each repository remote)'
-    return header(cfg, spec, context) + f'''
+    return header(cfg, spec, context, continued=continued) + f'''
 ## Ship it requested
 The reviewer clicked Ship it (request {decision['id']}, snapshot {decision['snapshot_id']}, status {decision['status']}).
 That click approves exactly this: push each review branch and open one real pull request per affected repository, for the approved snapshot only.
@@ -244,26 +261,129 @@ PR platform access as recorded by the user: {access}
 
 # ---- Supervisor ----
 
-def stop(process, grace=10):
-    if process.poll() is not None: return
-    try: os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError: return
-    try: process.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL); process.wait()
+def descendants(pid):
+    # Linux: whole tree plus everything in the CLI's session, with start times.
+    table, found = {}, []
+    for entry in Path('/proc').glob('[0-9]*'):
+        try: fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+        except (OSError, IndexError): continue
+        item = (int(entry.name), fields[19])
+        table.setdefault(int(fields[1]), []).append(item)
+        if int(fields[3]) == pid and item[0] != pid: found.append(item)
+    queue = [pid]
+    while queue:
+        for child in table.get(queue.pop(), []): found.append(child); queue.append(child[0])
+    return found
+
+
+SCOPED = None
+def scoped():
+    # systemd user manager: each CLI gets its own cgroup scope. Even children that detach completely stay findable.
+    global SCOPED
+    if SCOPED is None:
+        try:
+            SCOPED = bool(shutil.which('systemd-run')) and os.environ.get('PREPR_AGENT_SPAWN') != 'detached' and subprocess.run(
+                ['systemd-run', '--user', '--scope', '--quiet', '--collect', 'true'], capture_output=True, timeout=20).returncode == 0
+        except (OSError, subprocess.TimeoutExpired): SCOPED = False
+    return SCOPED
+
+
+def own_unit():
+    # Runner's service unit, when it runs as one: CLI scopes end with it.
+    try: name = Path('/proc/self/cgroup').read_text().strip().rsplit('/', 1)[-1]
+    except OSError: return ''
+    return name if name.endswith('.service') else ''
+
+
+def end_scope(unit):
+    if not unit: return
+    try: subprocess.run(['systemctl', '--user', 'kill', '--signal=SIGKILL', unit], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired): pass
+
+
+def slay(pid, tree=()):
+    # Kill process group and recorded tree. Start time guards against reused PIDs.
+    try: os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError): pass
+    for child, born in tree:
+        try:
+            if Path(f'/proc/{child}/stat').read_text().rsplit(')', 1)[1].split()[19] == born: os.kill(child, signal.SIGKILL)
+        except (OSError, IndexError): pass
+
+
+def stop(process, grace=10, family=()):
+    # End CLI and everything it started. Nothing may outlive it.
+    tree = {*descendants(process.pid), *family}
+    if process.poll() is None:
+        try: os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError: pass
+        try: process.wait(timeout=grace)
+        except subprocess.TimeoutExpired: pass
+    slay(process.pid, tree)
+    process.wait()
+
+
+class Cli:
+    # One agent CLI process of a review conversation.
+    def __init__(self, process, log, epoch, now, session='', unit=''):
+        self.process, self.log, self.epoch, self.used, self.session, self.unit = process, Path(log), epoch, now, session, unit
+        self.offset, self.rest, self.outbox = 0, b'', b''
+        self.family = set()   # processes it started, kept to find those that detach from it
+
+    def send(self, prompt):
+        self.outbox += (json.dumps({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}}) + '\n').encode()
+        self.pump()
+
+    def pump(self):
+        # Non-blocking: a busy CLI never stalls the runner.
+        while self.outbox:
+            try: sent = os.write(self.process.stdin.fileno(), self.outbox[:65536])
+            except BlockingIOError: return
+            except (OSError, ValueError): self.outbox = b''; return
+            self.outbox = self.outbox[sent:]
+
+    def events(self):
+        # New complete JSON lines of CLI output.
+        with open(self.log, 'rb') as f:
+            f.seek(self.offset); data = f.read()
+        self.offset += len(data)
+        lines = (self.rest+data).split(b'\n'); self.rest = lines.pop()
+        for line in lines:
+            try: event = json.loads(line)
+            except ValueError: continue
+            if isinstance(event, dict):
+                self.session = event.get('session_id') or (event.get('thread_id') if event.get('type') == 'thread.started' else '') or self.session
+                yield event
+
+    def track(self):
+        self.family.update(descendants(self.process.pid))
+
+    def end(self, grace=10):
+        # Closed stdin lets a waiting CLI save and leave; then make sure, strays included.
+        self.track()
+        if self.process.stdin:
+            try: self.process.stdin.close()
+            except OSError: pass
+            try: self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired: pass
+        stop(self.process, grace, self.family)
+        end_scope(self.unit)
 
 
 class Job:
-    def __init__(self, process, kind, log, started, last):
-        self.process, self.kind, self.log, self.started, self.beat = process, kind, log, started, started
+    # One turn: comment batch or Ship it.
+    def __init__(self, cli, kind, started, last):
+        self.cli, self.kind, self.started, self.beat = cli, kind, started, started
         self.last = last      # thread ID -> newest message ID at launch
         self.verdict = ''     # 'cancelled', or reason the runner killed it
+        self.code = None      # set when a staying CLI reports its turn result
 
 
 class Supervisor:
     def __init__(self, api, url, setup=dict, clock=time.monotonic):
         self.api, self.url, self.setup, self.clock = api, url.rstrip('/'), setup, clock
-        self.jobs, self.said = {}, {}
+        self.jobs, self.live, self.said = {}, {}, {}   # running turns, CLIs kept up between turns, last log lines
+        self.count = 0
 
     def log(self, rid, text):
         # Same line once: service down repeats every tick.
@@ -277,7 +397,7 @@ class Supervisor:
             try: self.clicks(url)
             except (ValueError, OSError) as exc: self.log('service', f'{url}: {exc}')
             else: self.said.pop('service', None)
-        for rid in sorted(set(registered()) | set(self.jobs)):
+        for rid in sorted(set(registered()) | set(self.jobs) | set(self.live)):
             try:
                 with guard(rid): self.step(rid)
             except Exception as exc:
@@ -301,16 +421,27 @@ class Supervisor:
             except (ValueError, OSError) as exc:
                 self.api(url, f'/api/reviews/{rid}/resume', {'action': 'fail', 'request': target['request'], 'error': str(exc)[:500] or 'runner error'})
 
+    def close(self, rid, reason, cfg=None):
+        # End the CLI kept up for this review. Conversation stays resumable.
+        cli = self.live.pop(rid, None)
+        cfg = cfg or load(rid)
+        if cfg and cfg.pop('live', None) is not None:
+            cfg.pop('unit', None); store(cfg)
+        if cli:
+            cli.end(); self.log(rid, f'CLI {cli.process.pid} ended: {reason}')
+
     def step(self, rid):
         cfg, job = load(rid), self.jobs.get(rid)
         if cfg is None or cfg['state'] == 'done':
-            if job: stop(job.process); del self.jobs[rid]
-            return
+            # Review over: nothing of it stays alive.
+            if job: self.live.setdefault(rid, job.cli); del self.jobs[rid]
+            return self.close(rid, 'review released', cfg)
         if job:
-            code = job.process.poll()
+            code = self.turn(job)
             if code is None: return self.mind(cfg, job)
             del self.jobs[rid]
             return self.finish(cfg, job, code)
+        self.rest(cfg)
         if cfg['state'] == 'failed': return self.parked(cfg)
         state = folder(rid)/'watch.json'
         if len(self.jobs) >= LIMIT:
@@ -331,39 +462,79 @@ class Supervisor:
             attach(self.api, cfg); return
         self.release(cfg, status)   # closed, or replaced by another agent
 
+    def rest(self, cfg):
+        # Waiting CLI: end it when gone stale. Next batch resumes the conversation in a new process.
+        rid = cfg['review']; cli = self.live.get(rid)
+        if not cli:
+            if cfg.pop('live', None) is not None:
+                cfg.pop('unit', None); store(cfg)
+            return
+        minutes = float(self.setup().get('agentIdle', IDLE))
+        if cli.process.poll() is not None: self.close(rid, 'left by itself', cfg)
+        elif cli.epoch != cfg.get('epoch'): self.close(rid, 'review handed over again', cfg)
+        elif self.clock()-cli.used > minutes*60: self.close(rid, f'no reviewer activity for {minutes:g} minutes', cfg)
+
+    def turn(self, job):
+        # None while the turn runs. Staying CLI reports a result; one-turn CLI exits.
+        cli = job.cli; cli.pump(); cli.track()
+        for event in cli.events():
+            if event.get('type') == 'result' and cli.process.stdin: job.code = 1 if event.get('is_error') else 0
+        return job.code if job.code is not None else cli.process.poll()
+
     def launch(self, cfg, kind, threads=(), latest=None, decision=None):
         rid = cfg['review']; directory = folder(rid); runs = directory/'runs'
+        cli = self.live.get(rid)
         try:
             runs.mkdir(exist_ok=True)
-            for old in sorted(runs.iterdir())[:-40]: old.unlink()
+            for old in [f for f in sorted(runs.iterdir()) if not cli or f != cli.log][:-40]: old.unlink()
             spec = json.loads(Path(cfg['manifest']).read_text())
             context = (directory/'context.md').read_text() if (directory/'context.md').exists() else ''
+            session = cli.session if cli else cfg.get('session', '')
+            continued = bool(cli or session)
             if kind == 'comments':
                 ids = [t['id'] for t in threads]
                 opened = self.api(cfg['url'], f'/api/reviews/{rid}/feedback')['threads']
                 others = [t for t in opened if t['status'] == 'open' and t['id'] not in ids]
-                prompt = comments_prompt(cfg, spec, context, threads, others, latest)
+                prompt = comments_prompt(cfg, spec, context, threads, others, latest, continued)
                 review_watch.set_activity(self.api, watch_state(rid), 'reply', ids)
-            else: prompt = ship_prompt(cfg, spec, context, decision, self.setup().get('pr'))
+            else: prompt = ship_prompt(cfg, spec, context, decision, self.setup().get('pr'), continued)
             name = time.strftime('%Y%m%d-%H%M%S') + f'-{kind}'
             private(runs/f'{name}.prompt.txt', prompt)
-            log = runs/f'{name}.log'
-            private(log, '')
-            with open(runs/f'{name}.prompt.txt', 'rb') as stdin, open(log, 'ab') as out:
-                process = subprocess.Popen(command(cfg, self.setup().get('agentArgs', {}).get(cfg['agent'])), cwd=cfg['cwd'], env=clean_env(),
-                                           stdin=stdin, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+            if cli:
+                # Same process, next turn. Output of earlier turns is not this turn's result.
+                for _ in cli.events(): pass
+                cli.send(prompt)
+            else:
+                stays = cfg['agent'] in PERSISTENT
+                if stays:
+                    # Room for one more: end the CLI idle longest.
+                    idle = sorted((c.used, r) for r, c in self.live.items() if r not in self.jobs)
+                    while len(self.live) >= LIMIT and idle: self.close(idle.pop(0)[1], 'made room for another review')
+                log = runs/f'{name}.log'; private(log, '')
+                argv, unit = [sys.executable, '-c', TIED, *command(cfg, self.setup().get('agentArgs', {}).get(cfg['agent']), session)], ''
+                if scoped():
+                    self.count += 1; unit = f'prepr-cli-{os.getpid()}-{self.count}.scope'; bound = own_unit()
+                    argv = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--unit', unit, *(['-p', f'BindsTo={bound}'] if bound else []), '--', *argv]
+                with open(runs/f'{name}.prompt.txt', 'rb') as stdin, open(log, 'ab') as out:
+                    process = subprocess.Popen(argv, cwd=cfg['cwd'], env=clean_env(), stdin=subprocess.PIPE if stays else stdin,
+                                               stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+                cli = Cli(process, log, cfg.get('epoch'), self.clock(), session, unit)
+                if stays:
+                    os.set_blocking(process.stdin.fileno(), False)
+                    self.live[rid] = cli; cfg['live'] = process.pid; cfg['unit'] = unit; cli.send(prompt)
         except (OSError, ValueError) as exc:
             cfg['log'] = ''
             return self.give_up(cfg, kind, f'cannot start {cfg["agent"]}: {exc}')
-        self.jobs[rid] = Job(process, kind, log, self.clock(), {t['id']: t['messages'][-1]['id'] for t in threads})
-        cfg['run'] = {'kind': kind, 'pid': process.pid, 'log': str(log)}; store(cfg)
-        self.log(rid, f'{kind} run started ({cfg["agent"]}, attempt {cfg["attempts"]+1}): {log}')
+        cli.used = self.clock()
+        self.jobs[rid] = Job(cli, kind, self.clock(), {t['id']: t['messages'][-1]['id'] for t in threads})
+        cfg['run'] = {'kind': kind, 'pid': cli.process.pid, 'log': str(cli.log), 'unit': cli.unit}; store(cfg)
+        self.log(rid, f'{kind} turn started ({cfg["agent"]} {cli.process.pid}, {"same conversation" if continued else "new conversation"}, attempt {cfg["attempts"]+1}): {cli.log}')
 
     def mind(self, cfg, job):
-        # Running job: enforce time limit, keep watcher alive, obey reviewer decisions.
+        # Running turn: enforce time limit, keep watcher alive, obey reviewer decisions.
         now = self.clock()
         if now-job.started > TIMEOUT:
-            job.verdict = f'run timed out after {TIMEOUT//60} minutes'; stop(job.process); return
+            job.verdict = f'run timed out after {TIMEOUT//60} minutes'; job.cli.end(); return
         if now-job.beat < BEAT or job.kind != 'comments': return
         job.beat = now
         status = review_watch.heartbeat(self.api, watch_state(cfg['review']))['status']
@@ -371,7 +542,7 @@ class Supervisor:
             attach(self.api, cfg); review_watch.set_activity(self.api, watch_state(cfg['review']), 'reply', list(job.last))
         elif status != 'watching':
             # Close, Ship it or handover beats the running batch.
-            job.verdict = 'cancelled'; stop(job.process)
+            job.verdict = 'cancelled'; job.cli.end()
 
     def unanswered(self, cfg, job):
         threads = {t['id']: t for t in self.api(cfg['url'], f'/api/reviews/{cfg["review"]}/feedback')['threads']}
@@ -380,10 +551,19 @@ class Supervisor:
 
     def finish(self, cfg, job, code):
         # Outcome decides, not exit code: answered threads or recorded ship result.
-        rid = cfg['review']; cfg.pop('run', None); cfg['log'] = str(job.log)
+        rid, cli = cfg['review'], job.cli; cfg.pop('run', None); cfg['log'] = str(cli.log)
+        for _ in cli.events(): pass
+        if cli.session: cfg['session'] = cli.session
+        cli.used = self.clock()
+        gone = cli.process.poll() is not None
+        if self.live.get(rid) is not cli or gone:
+            # One-turn CLI, or one that died: reap it and whatever it left behind.
+            cli.end()
+            if self.live.get(rid) is cli: del self.live[rid]
+            if rid not in self.live: cfg.pop('live', None); cfg.pop('unit', None)
         if job.verdict == 'cancelled':
-            store(cfg); self.log(rid, f'{job.kind} run cancelled'); return
-        error = job.verdict or (f'{cfg["agent"]} exited with code {code}' if code else '')
+            store(cfg); self.log(rid, f'{job.kind} turn cancelled'); return
+        error = job.verdict or (f'{cfg["agent"]} exited with code {code}' if code and gone else f'{cfg["agent"]} reported an error' if code else '')
         if job.kind == 'ship':
             decision = self.api(cfg['url'], f'/api/reviews/{rid}/watch')['decision'] or {}
             if decision.get('status') in ('shipped', 'blocked'): return self.release(cfg, 'ship ' + decision['status'])
@@ -394,6 +574,8 @@ class Supervisor:
                 settle(self.api, rid)
                 cfg.update(attempts=0, error=''); store(cfg); self.log(rid, 'comments answered'); return
             error = error or f'run ended without answering {len(left)} thread{"" if len(left) == 1 else "s"}'
+        # Next attempt starts clean: new process, new conversation, whole briefing.
+        self.close(rid, 'turn failed', cfg); cfg.pop('session', None)
         cfg['attempts'] += 1; cfg['error'] = error
         if cfg['attempts'] >= ATTEMPTS: return self.give_up(cfg, job.kind, error)
         store(cfg); self.log(rid, f'{error}; retrying')
@@ -427,17 +609,26 @@ class Supervisor:
 
     def release(self, cfg, reason):
         cfg.pop('run', None); cfg.update(state='done', reason=reason); store(cfg)
+        self.close(cfg['review'], reason, cfg)
         self.log(cfg['review'], f'released: {reason}')
 
+    def shutdown(self, reason):
+        # Runner leaving or restarting: take every CLI along.
+        for rid, job in list(self.jobs.items()): job.cli.end(5); del self.jobs[rid]
+        for rid in list(self.live): self.close(rid, reason)
+
     def sweep(self):
-        # Runs left by a dead runner (Linux): end them, their batch replays.
+        # CLIs left by a dead runner (Linux): end them. Unanswered batch replays, conversation resumes.
         for cfg in filter(None, map(load, registered())):
-            run = cfg.pop('run', None)
-            if not run: continue
-            try:
-                if Path(cfg['bin']).name.encode() in Path(f'/proc/{run["pid"]}/cmdline').read_bytes(): os.killpg(run['pid'], signal.SIGTERM)
-            except (OSError, KeyError): pass
-            store(cfg)
+            run = cfg.pop('run', None) or {}
+            pids = {cfg.pop('live', None), run.get('pid')} - {None}
+            for unit in {cfg.pop('unit', None), run.get('unit')} - {None, ''}: end_scope(unit)
+            for pid in pids:
+                try:
+                    if Path(cfg['bin']).name.encode() in Path(f'/proc/{pid}/cmdline').read_bytes():
+                        slay(pid, descendants(pid)); self.log(cfg['review'], f'ended leftover CLI {pid}')
+                except OSError: pass
+            if pids: store(cfg)
 
 
 def source_stamp():
@@ -453,8 +644,7 @@ def run(api, url, setup):
         lock.close(); print('Agent runner already active'); return False
     supervisor = Supervisor(api, url, setup)
     def leave(*_):
-        for job in supervisor.jobs.values(): stop(job.process, 5)
-        sys.exit(0)
+        supervisor.shutdown('runner stopping'); sys.exit(0)
     signal.signal(signal.SIGTERM, leave); signal.signal(signal.SIGINT, leave)
     supervisor.sweep()
     stamp = source_stamp()
@@ -464,6 +654,7 @@ def run(api, url, setup):
         if not supervisor.jobs and source_stamp() != stamp:
             # Tool updated: same process, new code.
             supervisor.log('runner', 'source changed, restarting')
+            supervisor.shutdown('runner restarting')
             os.execv(sys.executable, [sys.executable, *sys.argv])
         time.sleep(TICK)
 
@@ -503,5 +694,5 @@ def status(rid=None):
     reviews = []
     for name in ([rid] if rid else registered()):
         cfg = load(name)
-        if cfg: reviews.append({k: cfg[k] for k in ('review', 'state', 'agent', 'author', 'attempts', 'error', 'reason', 'run', 'log') if cfg.get(k) not in (None, '')})
+        if cfg: reviews.append({k: cfg[k] for k in ('review', 'state', 'agent', 'author', 'attempts', 'error', 'reason', 'run', 'live', 'session', 'log') if cfg.get(k) not in (None, '')})
     return {'runner': 'running' if alive() else 'stopped', 'log': str(home()/'runner.log'), 'reviews': reviews}

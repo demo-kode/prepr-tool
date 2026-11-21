@@ -89,9 +89,16 @@ python3 review.py agent-ensure                 # start runner by hand
 - Runner: one small host process, no model. Polls local service, keeps watcher slot of each
   recorded review, survives sleep and restarts. Started by `agent-start` (systemd user unit when
   available, else detached); VS Code extension brings it back at window start.
-- Comment batch or Ship it click: runner starts recorded CLI fresh, whole context on stdin (task
-  context from working agent, review, repos, manifest, threads, rules). No saved session involved.
-- Run answered nothing or recorded no ship result: one retry, then page shows reason and log path
+- One CLI conversation per review. First comment batch or Ship it click starts recorded CLI with
+  whole context as text (task context from working agent, review, repos, manifest, threads, rules);
+  later batches go into that same conversation. Claude Code process stays up between batches; Codex
+  runs one process per batch and resumes its thread.
+- No leaked CLIs. Waiting CLI ends after 20 minutes without reviewer activity
+  (`setup --agent-idle MINUTES`); next comment resumes conversation. CLI ends with the review (Close,
+  Ship it result, `agent-stop`), on failed turn, 60 min turn limit, runner stop or crash. Its child
+  processes go with it (process group, session and, with systemd, its own cgroup scope). At most 4
+  alive. `agent-status` shows live pid.
+- Turn answered nothing or recorded no ship result: one retry in a clean conversation, then page shows reason and log path
   with **Start watching** to retry. Logs and prompts: `.local/agents/reviews/ID/runs/`.
 - **Start watching** also attaches a review nobody handed over: recorded CLI, else
   `setup --agent codex|claude`, else first installed. Page says when no runner answers.

@@ -385,6 +385,7 @@ def main():
     p.add_argument('--pr-platform', choices=PR_PLATFORMS)
     p.add_argument('--pr-access', help='How agent reaches PR platform: CLI, account, org/project, target branch')
     p.add_argument('--agent', choices=['codex', 'claude'], help='Background agent for reviews with no recorded CLI')
+    p.add_argument('--agent-idle', type=float, metavar='MINUTES', help='End a waiting background CLI after this long without reviewer activity (default 20)')
     p.add_argument('--agent-args', nargs=2, metavar=('AGENT', 'FLAGS'), help="Permission flags for background runs, e.g. claude '--permission-mode acceptEdits'; '' restores default")
     sub.add_parser('vscode-install', help='Build and install the PrePR VS Code extension')
     p = sub.add_parser('close', help='Close review without PR (same as Close button)')
@@ -455,6 +456,9 @@ def main():
             cfg = save_setup(pr=pr)
         if args.vscode: cfg = save_setup(vscode=args.vscode)
         if args.agent: cfg = save_setup(agent=args.agent)
+        if args.agent_idle is not None:
+            if args.agent_idle <= 0: raise ValueError('Idle limit must be above 0 minutes')
+            cfg = save_setup(agentIdle=args.agent_idle)
         if args.agent_args:
             import review_agent, shlex
             if args.agent_args[0] not in review_agent.AUTHORS: raise ValueError('Agent must be codex or claude')

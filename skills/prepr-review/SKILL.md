@@ -33,13 +33,14 @@ README has manifest fields and startup commands.
   and why, constraints and paths not to touch, how to run checks, PR conventions (target branch,
   title, reviewers, template), open questions. No secrets. Background runs get this text plus
   review, repos, manifest and threads. They never see your chat. Changed facts: rerun `agent-start`
-  with new file.
+  with new file (starts a new background conversation).
 - Ask user whether to open PrePR. Explicit request to review already counts; never ask twice.
   Yes: `python3 review.py open REVIEW_ID` (VS Code tab when extension installed, else browser).
   Open fails: report it, give URL.
 - Then end turn. Never poll, never loop on `watch`, never fork yourself to watch. Host runner
-  watches without a model. Reviewer comment or **Ship it** starts same CLI headless with the
-  context; it answers in threads, commits fix rounds, republishes, opens PRs on Ship it.
+  watches without a model. Reviewer comment or **Ship it** goes to one background CLI
+  conversation per review, started with the context; it answers in threads, commits fix rounds,
+  republishes, opens PRs on Ship it.
 - User returns to chat on same task: `python3 review.py agent-status REVIEW_ID` first. `run`
   present: background run is working in that checkout; wait. Read `git log` for fix-round commits
   and `feedback` before editing. After new edits: commit, republish.
@@ -97,16 +98,23 @@ README has manifest fields and startup commands.
 - Runner: one host process, no model. `agent-start` starts it (systemd user unit when available,
   else detached); VS Code extension restarts it at window start. Manual: `agent-ensure`.
 - Per recorded review it keeps watcher slot (page: green **Agent watching**), repairs heartbeat
-  gaps after sleep or restart, starts one CLI run per comment batch or Ship it click. Run active:
-  amber **Agent working**, threads show who writes.
-- Each run is fresh process of recorded CLI, whole context as text on stdin. No saved session
-  needed. Comments arriving during a run wait for next run.
+  gaps after sleep or restart, sends each comment batch or Ship it click to that review's CLI.
+  Turn active: amber **Agent working**, threads show who writes.
+- One CLI conversation per review, reused until review ends. First turn gets whole context as
+  text; later turns only new threads. Claude Code: one process stays up between turns. Codex:
+  one process per turn, same thread resumed. Comments arriving during a turn wait for next turn.
+- No leftovers. Waiting CLI ends after 20 minutes without reviewer activity
+  (`setup --agent-idle MINUTES`); next comment resumes same conversation in new process. CLI and
+  everything it started end on Close, Ship it result, `agent-stop`, new `agent-start`, failed
+  turn, time limit (60 min per turn), runner stop or crash. At most 4 CLIs alive.
 - Outcome decides, not exit code: every batch thread answered or resolved; Ship it result
-  recorded. Else one retry, then page shows reason with log path and **Start watching** to retry.
-  New reviewer message also retries. `agent-status` shows state, last log.
+  recorded. Else one retry in a clean conversation with whole context again (also covers a lost
+  saved conversation), then page shows reason with log path and **Start watching** to retry.
+  New reviewer message also retries. `agent-status` shows state, live CLI pid, last log.
 - **Start watching** also attaches reviews with no recorded agent: recorded CLI, else
   `setup --agent`, else first installed. Runner missing: page says so; `agent-ensure`.
-- **Close** stops run and releases review. Ship it stops comment run, starts ship run.
+- **Close** ends CLI and releases review. Ship it stops comment turn, runs ship turn in same
+  conversation.
 - Unattended permissions: each CLI's own automatic approval review. Codex `--approve-for-me`
   (workspace-write sandbox, local network); Claude Code `--permission-mode auto`. User changes
   them: `setup --agent-args claude '--permission-mode acceptEdits'`. Runs never get more push,
@@ -119,7 +127,9 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 - No chat. Answer only in PrePR threads or recorded ship result. Unclear: ask in thread, leave open.
 - Runner owns watcher: no `watch-start`, `watch`, `watch-ack`, `watch-stop`, `agent-*`. Only
   `watch-activity --state ... --activity code` before editing code.
-- Handle listed batch, then end. No waiting for more comments.
+- Handle listed batch, then end turn. No waiting for more comments: runner sends next batch into
+  this same conversation ("More work on PrePR review ...").
+- Start nothing that must outlive the turn (servers, watchers): runner ends all your processes.
 
 ## Ship it handoff
 

@@ -14,32 +14,61 @@ import review_agent
 import review_watch
 import server
 
-# Stand-in for codex/claude: records what it was given, then acts per mode file.
+# Stand-in for codex/claude: one conversation, records what it was given, acts per mode file.
 FAKE = r'''#!/usr/bin/env python3
-import json, os, re, shlex, subprocess, sys, time
-root = os.environ['FAKE_AGENT_DIR']
-prompt = sys.stdin.read()
-with open(root + '/calls.jsonl', 'a') as f:
-    f.write(json.dumps({'argv': sys.argv, 'prompt': prompt, 'cwd': os.getcwd(),
-                        'session': [k for k in os.environ if k in ('CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID')],
-                        'kept': os.environ.get('CODEX_HOME', '')}) + '\n')
-mode = open(root + '/mode').read().strip()
-cli = shlex.split(re.search(r'^- CLI: (.+)$', prompt, re.M)[1])
-author = re.search(r'^You are (.+?), the unattended', prompt)[1]
-if mode == 'crash': sys.exit(3)
-if mode == 'sleep': time.sleep(120)
-if mode in ('reply', 'reply-ack', 'reply-stop'):
-    for tid in re.findall(r'^### Thread ([a-f0-9]+)', prompt.split('## Other open threads')[0], re.M):
-        subprocess.run(cli + ['reply', tid, 'Answered by background run.', '--author', author], check=True, capture_output=True)
-state = re.search(r'^- Watcher state file: (.+)$', prompt, re.M)[1]
-# Old skill habits: agent acknowledges the batch or stops the watcher itself.
-if mode == 'reply-ack': subprocess.run(cli + ['watch-ack', '--state', state], check=True, capture_output=True)
-if mode == 'reply-stop': subprocess.run(cli + ['watch-stop', '--state', state], check=True, capture_output=True)
-if mode == 'ship':
-    state = shlex.split(re.search(r'ship-claim --state (.+?)`', prompt)[1])[0]
-    subprocess.run(cli + ['ship-claim', '--state', state], check=True, capture_output=True)
-    subprocess.run(cli + ['ship-result', '--state', state, '--status', 'shipped', '--body', 'app: https://example.invalid/pr/1'], check=True, capture_output=True)
+import json, os, re, shlex, subprocess, sys, time, uuid
+root = os.environ['FAKE_AGENT_DIR']; argv = sys.argv; known = root + '/sessions'
+def act(prompt, session):
+    with open(root + '/calls.jsonl', 'a') as f:
+        f.write(json.dumps({'argv': argv, 'prompt': prompt, 'cwd': os.getcwd(), 'pid': os.getpid(), 'conversation': session,
+                            'session': [k for k in os.environ if k in ('CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID')],
+                            'kept': os.environ.get('CODEX_HOME', '')}) + '\n')
+    mode = open(root + '/mode').read().strip()
+    cli = shlex.split(re.search(r'^- CLI: (.+)$', prompt, re.M)[1])
+    author = (re.search(r'^You are (.+?), the unattended', prompt) or re.search(r'same role \((.+?), unattended', prompt))[1]
+    if mode == 'crash': sys.exit(3)
+    if mode == 'sleep': time.sleep(120)
+    if mode == 'child':
+        # Leaves a process outside its own process group.
+        child = subprocess.Popen(['sleep', '300'], start_new_session=True)
+        open(root + '/child', 'w').write(str(child.pid)); mode = 'reply'
+    if mode in ('reply', 'reply-ack', 'reply-stop'):
+        for tid in re.findall(r'^### Thread ([a-f0-9]+)', prompt.split('## Other open threads')[0], re.M):
+            subprocess.run(cli + ['reply', tid, 'Answered by background run.', '--author', author], check=True, capture_output=True)
+    state = re.search(r'^- Watcher state file: (.+)$', prompt, re.M)[1]
+    # Old skill habits: agent acknowledges the batch or stops the watcher itself.
+    if mode == 'reply-ack': subprocess.run(cli + ['watch-ack', '--state', state], check=True, capture_output=True)
+    if mode == 'reply-stop': subprocess.run(cli + ['watch-stop', '--state', state], check=True, capture_output=True)
+    if mode == 'ship':
+        subprocess.run(cli + ['ship-claim', '--state', state], check=True, capture_output=True)
+        subprocess.run(cli + ['ship-result', '--state', state, '--status', 'shipped', '--body', 'app: https://example.invalid/pr/1'], check=True, capture_output=True)
+wanted = next((argv[i+1] for i, a in enumerate(argv) if a in ('resume', '--resume')), '')
+if wanted and wanted not in (open(known).read().split() if os.path.exists(known) else []):
+    sys.exit('no rollout found for thread id ' + wanted)
+session = wanted or str(uuid.uuid4())
+if not wanted: open(known, 'a').write(session + '\n')
+if '--input-format' in argv:
+    # Claude: stays up, one message per line.
+    print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': session}), flush=True)
+    for line in sys.stdin:
+        act(json.loads(line)['message']['content'][0]['text'], session)
+        print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': session}), flush=True)
+else:
+    print(json.dumps({'type': 'thread.started', 'thread_id': session}), flush=True)
+    act(sys.stdin.read(), session)
 '''
+
+
+def running(pid):
+    try: return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+    except OSError: return False
+
+
+def ended(*pids):
+    # Kill signal lands a moment after it is sent.
+    deadline = time.time()+3
+    while any(map(running, pids)) and time.time() < deadline: time.sleep(.02)
+    return not any(map(running, pids))
 
 
 class AgentTests(unittest.TestCase):
@@ -64,7 +93,7 @@ class AgentTests(unittest.TestCase):
         self.sup.log = lambda *a: None
 
     def tearDown(self):
-        for job in self.sup.jobs.values(): review_agent.stop(job.process, 2)
+        self.sup.shutdown('test over')
         self.http.shutdown(); self.http.server_close(); self.thread.join(); self.tmp.cleanup()
 
     def api(self, path, data=None): return review.api(self.url, path, data)
@@ -75,9 +104,11 @@ class AgentTests(unittest.TestCase):
     def comment(self, body='Why?'):
         return self.api('/api/threads', {'snapshot': self.sid, 'repo': 'app', 'path': 'a.py', 'side': 'new', 'line': 1, 'author': 'Reviewer', 'body': body})['id']
     def run_job(self):
-        # One launch tick, wait for the CLI, one finishing tick.
-        self.sup.tick(); self.assertIn('demo', self.sup.jobs, 'run started')
-        self.sup.jobs['demo'].process.wait(timeout=30); self.sup.tick()
+        # One launch tick, then tick until that turn is settled.
+        self.sup.tick(); self.assertIn('demo', self.sup.jobs, 'turn started')
+        deadline = time.time()+30
+        while 'demo' in self.sup.jobs:
+            self.assertLess(time.time(), deadline, 'turn finished'); time.sleep(.05); self.sup.tick()
     def last_author(self, tid): return [t for t in self.api('/api/reviews/demo/feedback')['threads'] if t['id'] == tid][0]['messages'][-1]['author']
 
     def test_comment_starts_same_cli_with_whole_context_as_text(self):
@@ -87,7 +118,7 @@ class AgentTests(unittest.TestCase):
         self.sup.tick(); self.assertEqual(self.sup.jobs, {}, 'idle review runs no model')
         tid = self.comment('Why this change?'); self.sup.tick()
         watcher = self.view()['watcher']; self.assertEqual((watcher['activity'], watcher['threads']), ('reply', [tid]))
-        self.sup.jobs['demo'].process.wait(timeout=30); self.sup.tick()
+        while 'demo' in self.sup.jobs: time.sleep(.05); self.sup.tick()
         call = self.calls()[0]
         self.assertEqual(call['argv'][1:3], ['exec', '--json']); self.assertIn('--approve-for-me', call['argv']); self.assertEqual(call['argv'][-1], '-')
         self.assertEqual(call['argv'][call['argv'].index('--cd')+1], str(self.repo)); self.assertEqual(call['cwd'], str(self.repo))
@@ -133,12 +164,13 @@ class AgentTests(unittest.TestCase):
         request = self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})['id']
         self.mode('ship'); self.run_job()
         call = self.calls()[0]
-        self.assertEqual(call['argv'][1:5], ['--print', '--output-format', 'stream-json', '--verbose']); self.assertIn('auto', call['argv'])
+        self.assertEqual(call['argv'][1:7], ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']); self.assertIn('auto', call['argv'])
         for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'ship-verify --state', 'Never merge. Never deploy.']:
             self.assertIn(text, call['prompt'])
         decision = self.view()['decision']; self.assertEqual((decision['status'], decision['result']), ('shipped', 'app: https://example.invalid/pr/1'))
         cfg = review_agent.load('demo'); self.assertEqual((cfg['state'], cfg['reason']), ('done', 'ship shipped'))
         self.sup.tick(); self.assertEqual(len(self.calls()), 1)
+        self.assertFalse(running(call['pid']), 'review over: its CLI is gone'); self.assertEqual((self.sup.live, 'live' in cfg), ({}, False))
 
     def test_ship_it_alone_attaches_agent_on_unrecorded_review(self):
         self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})
@@ -157,7 +189,7 @@ class AgentTests(unittest.TestCase):
 
     def test_close_cancels_running_job(self):
         self.register(); self.comment(); self.mode('sleep'); self.sup.tick()
-        process = self.sup.jobs['demo'].process; self.assertIsNone(process.poll())
+        process = self.sup.jobs['demo'].cli.process; self.assertIsNone(process.poll())
         self.api('/api/reviews/demo/decision', {'action': 'close'})
         self.now += review_agent.BEAT; self.sup.tick(); self.assertIsNotNone(process.poll(), 'run stopped')
         self.sup.tick(); self.sup.tick()
@@ -201,7 +233,7 @@ class AgentTests(unittest.TestCase):
         wrong = self.root/'wrong.json'; wrong.write_text(json.dumps({'id': 'else', 'repos': []}))
         with self.assertRaises(ValueError): self.register(manifest=wrong)
         cfg, _ = self.register('claude')
-        self.assertEqual(review_agent.command(cfg, ['--permission-mode', 'acceptEdits'])[5:7], ['--permission-mode', 'acceptEdits'])
+        self.assertEqual(review_agent.command(cfg, ['--permission-mode', 'acceptEdits'])[7:9], ['--permission-mode', 'acceptEdits'])
         self.setup['agentArgs'] = {'claude': ['--model', 'x']}; self.comment(); self.run_job()
         self.assertIn('--model', self.calls()[0]['argv']); self.assertNotIn('auto', self.calls()[0]['argv'])
 
@@ -212,6 +244,76 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(self.last_author(tid), 'Codex')
             watcher = self.view()['watcher']; self.assertEqual((watcher['active'], watcher['activity']), (True, 'idle'), mode)
         self.assertEqual((errors, len(self.calls()), review_agent.load('demo')['state']), ([], 2, 'watching'))
+
+    def test_claude_process_reused_for_review_then_idle_timeout_then_resumed(self):
+        self.register('claude', context='Keep timeout configurable.')
+        first = self.comment('one'); self.run_job(); second = self.comment('two'); self.run_job()
+        a, b = self.calls(); pid = a['pid']
+        self.assertEqual((b['pid'], b['conversation'], self.last_author(first), self.last_author(second)), (pid, a['conversation'], 'Claude Code', 'Claude Code'))
+        self.assertIn('Keep timeout configurable.', a['prompt']); self.assertTrue(a['prompt'].startswith('You are Claude Code, the unattended'))
+        self.assertTrue(b['prompt'].startswith('More work on PrePR review demo.')); self.assertNotIn('Keep timeout configurable.', b['prompt']); self.assertIn(second, b['prompt'])
+        cfg = review_agent.load('demo'); self.assertEqual((cfg['live'], cfg['session'], running(pid)), (pid, a['conversation'], True))
+        self.assertEqual(review_agent.status('demo')['reviews'][0]['live'], pid)
+        # Reviewer away: CLI ends after the idle limit, watcher slot stays.
+        self.now += (review_agent.IDLE-1)*60; self.sup.tick(); self.assertTrue(running(pid))
+        self.now += 2*60; self.sup.tick(); self.assertFalse(running(pid)); self.assertEqual(self.sup.live, {})
+        self.assertNotIn('live', review_agent.load('demo')); self.assertTrue(self.view()['watcher']['active'])
+        # Reviewer back: new process, same conversation.
+        third = self.comment('three'); self.run_job(); c = self.calls()[2]
+        self.assertNotEqual(c['pid'], pid); self.assertEqual(c['argv'][-2:], ['--resume', a['conversation']]); self.assertEqual(c['conversation'], a['conversation'])
+        self.assertTrue(c['prompt'].startswith('More work on PrePR review demo.')); self.assertEqual(self.last_author(third), 'Claude Code')
+        self.setup['agentIdle'] = 1; self.now += 61; self.sup.tick(); self.assertFalse(running(c['pid']), 'idle limit from setup')
+
+    def test_codex_thread_reused_and_lost_thread_gets_whole_briefing_again(self):
+        self.register(context='Keep timeout configurable.'); self.comment('one'); self.run_job(); self.comment('two'); self.run_job()
+        a, b = self.calls()
+        self.assertEqual(b['argv'][-3:], ['resume', a['conversation'], '-']); self.assertNotIn('resume', a['argv'])
+        self.assertTrue(b['prompt'].startswith('More work on PrePR review demo.')); self.assertFalse(running(a['pid']) or running(b['pid']), 'one turn, then gone')
+        self.assertEqual(self.sup.live, {}); self.assertEqual(review_agent.load('demo')['session'], a['conversation'])
+        # Saved thread gone: failed resume, then clean start with the whole briefing.
+        (self.root/'sessions').unlink(); tid = self.comment('three'); self.run_job()
+        cfg = review_agent.load('demo'); self.assertEqual((cfg['attempts'], 'session' in cfg, len(self.calls())), (1, False, 2))
+        self.run_job(); c = self.calls()[2]
+        self.assertNotIn('resume', c['argv']); self.assertIn('Keep timeout configurable.', c['prompt']); self.assertTrue(c['prompt'].startswith('You are Codex'))
+        self.assertEqual((self.last_author(tid), review_agent.load('demo')['attempts'], self.view()['watcher']['error']), ('Codex', 0, ''))
+
+    def test_failed_turn_ends_staying_cli_and_restarts_clean(self):
+        self.register('claude'); self.comment('one'); self.run_job(); pid = self.calls()[0]['pid']
+        self.mode('silent'); tid = self.comment('two'); self.run_job()
+        self.assertFalse(running(pid), 'CLI of failed turn ended'); self.assertNotIn('session', review_agent.load('demo'))
+        self.mode('reply'); self.run_job(); c = self.calls()[2]
+        self.assertNotIn('--resume', c['argv']); self.assertTrue(c['prompt'].startswith('You are Claude Code')); self.assertEqual(self.last_author(tid), 'Claude Code')
+
+    def test_nothing_outlives_review_or_turn(self):
+        # Staying CLI plus a child that left its process group: both end with the review.
+        self.register('claude'); self.mode('child'); self.comment(); self.run_job()
+        pid, child = self.calls()[0]['pid'], int((self.root/'child').read_text())
+        self.assertTrue(running(pid) and running(child))
+        self.api('/api/reviews/demo/decision', {'action': 'close'}); self.sup.tick()
+        self.assertTrue(ended(pid, child)); self.assertEqual((self.sup.live, review_agent.load('demo')['state']), ({}, 'done'))
+        # One-turn CLI: detached child ends when the turn does.
+        self.payload['id'] = 'other'; self.sid = self.api('/api/reviews', self.payload)['snapshot']
+        review_agent.register(review.api, self.url, 'other', 'codex')
+        self.api('/api/threads', {'snapshot': self.sid, 'repo': 'app', 'path': 'a.py', 'side': 'new', 'line': 1, 'author': 'Reviewer', 'body': 'Why?'})
+        self.sup.tick(); deadline = time.time()+30
+        while 'other' in self.sup.jobs and time.time() < deadline: time.sleep(.3); self.sup.tick()
+        stray = int((self.root/'child').read_text()); self.assertNotEqual(stray, child)
+        # Fully detached child of an already finished CLI: only a cgroup scope still finds it.
+        if review_agent.scoped(): self.assertTrue(ended(stray), 'stray child of finished turn ended')
+        else: os.kill(stray, 9)
+
+    def test_runner_stop_restart_and_new_handoff_end_clis(self):
+        self.register('claude', context='old'); self.comment(); self.run_job(); first = self.calls()[0]['pid']
+        # Dead runner left its CLI: next runner ends it at start.
+        orphan = self.sup.live.pop('demo'); fresh = review_agent.Supervisor(review.api, self.url, lambda: self.setup, clock=lambda: self.now); fresh.log = lambda *a: None
+        fresh.sweep(); orphan.process.wait(timeout=10); self.assertFalse(running(first)); self.assertNotIn('live', review_agent.load('demo'))
+        # Handed over again with new context: CLI of the old conversation ends, next turn gets the new briefing.
+        self.comment('again'); self.run_job(); second = self.calls()[1]['pid']; self.assertTrue(running(second))
+        self.register('claude', context='new'); self.sup.tick(); self.assertFalse(running(second))
+        self.comment('more'); self.run_job(); third = self.calls()[2]
+        self.assertIn('new', third['prompt'].split('## Task context')[1]); self.assertNotIn('--resume', third['argv'])
+        # Runner leaving takes every CLI along.
+        self.assertTrue(running(third['pid'])); self.sup.shutdown('runner stopping'); self.assertFalse(running(third['pid']))
 
     def test_one_runner_at_a_time(self):
         self.assertFalse(review_agent.alive())
