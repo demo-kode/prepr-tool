@@ -1,20 +1,20 @@
 'use strict';
 (() => {
   let refreshing=false,watchedReview=null,lastCheck=0;
-  // Click goes to service; VS Code host polls it. Works in any browser, no vscode:// link.
+  // Click goes to service; host agent runner polls it. Works in any browser.
   function resumeButton(rid){
     const b=btn('Start watching',async()=>{b.disabled=true;
-      try{await api('/api/reviews/'+rid+'/resume',{action:'request'});toast('Starting review watcher…');await refresh();}
+      try{await api('/api/reviews/'+rid+'/resume',{action:'request'});toast('Asked agent runner to start');await refresh();}
       catch(e){b.disabled=false;throw e;}},'primary resume-agent');
     return b;
   }
   // Start progress, or button with reason last click went nowhere.
   function startControls(rid,author,start){
-    if(start?.status==='requested')return[el('span','','Starting watcher · waiting for VS Code…')];
-    if(start?.status==='starting')return[el('span','',`Starting ${author}…`)];
+    if(start?.status==='requested')return[el('span','','Starting background agent…')];
+    if(start?.status==='starting')return[el('span','',`Starting ${author||'agent'}…`)];
     const nodes=[];
-    if(start?.status==='unanswered')nodes.push(el('span','agent-away','VS Code did not answer · open or reload a VS Code window with the PrePR extension, then retry'));
-    if(start?.status==='failed')nodes.push(el('span','agent-away','Watcher did not start · '+start.error));
+    if(start?.status==='unanswered')nodes.push(el('span','agent-away','Agent runner did not answer · run `python3 review.py agent-ensure` in the PrePR folder, then retry'));
+    if(start?.status==='failed')nodes.push(el('span','agent-away','Agent did not start · '+start.error));
     nodes.push(resumeButton(rid));return nodes;
   }
   function indicator(active,label,description,working=false){
@@ -59,14 +59,15 @@
         const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
         if(d.result)holder.append(el('span','',d.result));
-        if(canStart&&['requested','preparing'].includes(d.status))holder.append(...startControls(rid,w0?.author||'Codex',result.start));
+        if(canStart&&['requested','preparing'].includes(d.status)){if(w0?.error)holder.append(el('span','agent-away',w0.error));holder.append(...startControls(rid,w0?.author,result.start));}
         return;
       }
-      if(!result.watcher){holder.append(...startControls(rid,'Codex',result.start));return;}
+      if(!result.watcher){holder.append(...startControls(rid,'',result.start));return;}
       if(result.watcher.active){
-        holder.append(el('span','',`${result.watcher.author} · ${result.watcher.activity==='idle'?'working session watching':result.watcher.activity==='code'?'changing code':'writing replies'}`));
+        holder.append(el('span','',`${result.watcher.author} · ${result.watcher.activity==='idle'?'watching':result.watcher.activity==='code'?'changing code':'writing replies'}`));
       }else{
-        holder.append(el('span',waiting?'agent-away':'',waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`),...startControls(rid,w0.author,result.start));
+        // Runner gave up: its reason replaces the plain idle note.
+        holder.append(el('span',waiting||w0.error?'agent-away':'',w0.error||(waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`)),...startControls(rid,w0.author,result.start));
       }
       if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
     }catch(e){if(holder.isConnected){holder.textContent=e.message;indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}

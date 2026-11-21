@@ -116,12 +116,29 @@ class WatchTests(unittest.TestCase):
 
     def test_start_without_session_preserves_review_context(self):
         t=self.api('/api/reviews/demo/resume')
-        self.assertEqual((t['agent'],t['session'],t['cwd'],t['roots'],t['active']),('codex','','/demo',['/demo'],False))
+        self.assertEqual((t['agent'],t['author'],t['session'],t['cwd'],t['roots'],t['active']),('','','','/demo',['/demo'],False))
         self.assertEqual(t['review']['repos'][0]['base'],'a'*40)
         self.assertEqual(t['review']['repos'][0]['branch'],'main')
         self.assertNotIn('files',t['review']['repos'][0])
         self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
         self.assertEqual(self.api('/api/reviews/demo/resume')['decision']['status'],'requested')
+
+    def test_ship_it_asks_runner_only_when_no_agent_attached(self):
+        self.start();self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
+        self.assertIsNone(self.api('/api/reviews/demo/watch')['start']);self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]})
+        self.payload['id']='lonely';sid=self.api('/api/reviews',self.payload)['snapshot']
+        self.api('/api/reviews/lonely/decision',{'action':'ship','snapshot':sid});self.assertEqual(self.api('/api/resume-requests'),{'reviews':['lonely']})
+        self.payload['id']='shut';self.api('/api/reviews',self.payload);self.api('/api/reviews/shut/decision',{'action':'close'})
+        self.assertEqual(self.api('/api/resume-requests'),{'reviews':['lonely']})
+
+    def test_runner_failure_shows_until_next_start(self):
+        self.start();state=json.loads(self.state.read_text());post=lambda d:self.api('/api/reviews/demo/watch',d)
+        with self.assertRaises(ValueError):post({'action':'fail','token':state['token'],'error':''})
+        self.assertEqual(post({'action':'fail','token':'f'*32,'error':'x'})['status'],'replaced')
+        self.assertEqual(post({'action':'fail','token':state['token'],'error':'run failed'})['status'],'failed')
+        view=self.api('/api/reviews/demo/watch')['watcher'];self.assertEqual((view['active'],view['activity'],view['error']),(False,'idle','run failed'))
+        self.assertEqual(self.poll()['status'],'stopped')
+        self.start();self.assertEqual(self.api('/api/reviews/demo/watch')['watcher']['error'],'')
 
     def test_start_click_relays_to_first_host(self):
         # Page click waits in service; host claims once; page sees progress.
@@ -130,7 +147,7 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'request'}),{'status':'requested'})
         self.assertEqual(self.api('/api/resume-requests'),{'reviews':['demo']});self.assertEqual(watch(),{'status':'requested'})
         claimed=self.api('/api/reviews/demo/resume',{'action':'claim'})
-        self.assertEqual((claimed['status'],claimed['agent'],claimed['session'],claimed['review']['id']),('claimed','codex','','demo'))
+        self.assertEqual((claimed['status'],claimed['agent'],claimed['session'],claimed['review']['id']),('claimed','','','demo'))
         self.assertEqual(self.api('/api/reviews/demo/resume',{'action':'claim'}),{'status':'none'})
         self.assertEqual(self.api('/api/resume-requests'),{'reviews':[]});self.assertEqual(watch(),{'status':'starting'})
         self.assertNotIn('session',json.dumps(self.api('/api/reviews/demo/watch')))

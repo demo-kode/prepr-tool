@@ -59,6 +59,9 @@ class VsixTests(unittest.TestCase):
                 self.assertEqual(names,{'[Content_Types].xml','extension.vsixmanifest','extension/package.json','extension/extension.js','extension/README.md','extension/media/icon.png','extension/media/icon.svg'})
                 m=z.read('extension.vsixmanifest').decode()
                 self.assertIn(f'Version="{pkg["version"]}" Publisher="demo-kode"',m)
+                # Installed copy carries the tool folder, so the extension can keep the agent runner up.
+                self.assertEqual(pkg['contributes']['configuration']['properties']['prepr.toolPath']['default'],'')
+                pkg['contributes']['configuration']['properties']['prepr.toolPath']['default']=str(ROOT)
                 self.assertEqual(json.loads(z.read('extension/package.json')),pkg)
                 self.assertIn('Path="extension/media/icon.png"',m);self.assertEqual(z.read('extension/media/icon.png')[:8],b'\x89PNG\r\n\x1a\n')
 

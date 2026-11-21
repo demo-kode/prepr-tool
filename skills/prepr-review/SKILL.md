@@ -1,6 +1,6 @@
 ---
 name: prepr-review
-description: Offer task-scoped PrePR review when a change set is ready, then watch and answer inline comments from the working agent's existing session. Use for pre-PR handoffs and local review feedback across repositories.
+description: Publish task-scoped PrePR review when a change set is ready, then hand it to the background agent that answers inline comments and Ship it. Use for pre-PR handoffs and local review feedback across repositories.
 ---
 
 # PrePR review
@@ -23,16 +23,27 @@ README has manifest fields and startup commands.
 - Record no secrets: no tokens, passwords, keys. Setup file: ignored `.local/setup.json`.
 - User asks to change choice: rerun `setup` with new flags.
 
-## Offer live review
+## Hand off
 
-- Finish scoped changes and relevant checks. Prepare pinned manifest and local review.
-- Ask user whether to open PrePR. Explicit request to review/watch already counts; never ask
-  twice. Decline: review stays available, no open, no monitoring.
-- Accepted: start watcher (below), then `python3 review.py open REVIEW_ID`: VS Code tab when
-  extension installed, else default browser. Open fails: report it, give URL.
-- Stay in current conversation. Answer each comment in its own PrePR thread. Never fork yourself
-  to watch. User's **Start watching** click lets the host resume the saved session or start Codex
-  with review context when no session is available. The watcher itself runs no model.
+- Finish scoped changes and relevant checks. Prepare pinned manifest, publish (below).
+- Then hand review to background agent. No question needed: idle watching runs no model.
+  `python3 review.py agent-start REVIEW_ID --manifest /path/review.json --context-file /path/context.md`
+  Run from task working dir. CLI auto-detected (Codex, Claude Code); else `--agent codex|claude`.
+- Context file: plain text, all a fresh agent needs. Goal and user wording that matters, decisions
+  and why, constraints and paths not to touch, how to run checks, PR conventions (target branch,
+  title, reviewers, template), open questions. No secrets. Background runs get this text plus
+  review, repos, manifest and threads. They never see your chat. Changed facts: rerun `agent-start`
+  with new file.
+- Ask user whether to open PrePR. Explicit request to review already counts; never ask twice.
+  Yes: `python3 review.py open REVIEW_ID` (VS Code tab when extension installed, else browser).
+  Open fails: report it, give URL.
+- Then end turn. Never poll, never loop on `watch`, never fork yourself to watch. Host runner
+  watches without a model. Reviewer comment or **Ship it** starts same CLI headless with the
+  context; it answers in threads, commits fix rounds, republishes, opens PRs on Ship it.
+- User returns to chat on same task: `python3 review.py agent-status REVIEW_ID` first. `run`
+  present: background run is working in that checkout; wait. Read `git log` for fix-round commits
+  and `feedback` before editing. After new edits: commit, republish.
+- User wants background handling off: `python3 review.py agent-stop REVIEW_ID`.
 
 ## Publish
 
@@ -71,7 +82,9 @@ README has manifest fields and startup commands.
   messages and empty threads. Never revive a deleted thread with a reply.
 - Check snapshot ID, repo, path, side, line before editing. Earlier open threads still matter;
   their line numbers belong to original snapshot. File comments: side `file`, line `0`.
-- Answer: `python3 review.py reply THREAD_ID 'Answer or verified change'`. Change code and run
+- Answering from chat (user asked you here): same author name as background agent, `--author Codex`
+  or `--author 'Claude Code'`. Other names read as reviewer messages and start a background run.
+- Answer: `python3 review.py reply THREAD_ID 'Answer or verified change' --author NAME`. Change code and run
   checks when asked. Commit each fix round locally as own commit (e.g.
   `review: tighten timeout validation (PrePR THREAD_ID)`), republish, cite short SHA in reply.
   Answer-only: no commit. Resolve only addressed threads; leave uncertain questions open.
@@ -79,60 +92,34 @@ README has manifest fields and startup commands.
 - Republish same manifest after fixes. Comments stay on original code; never silently reassigned.
   Discussion view includes earlier threads.
 
-## Watch in working session
+## Background agent
 
-One ignored state file per review, beside its manifest. Same author for watching and replies, so
-watcher skips own messages. Claude sessions use `Claude Code`.
+- Runner: one host process, no model. `agent-start` starts it (systemd user unit when available,
+  else detached); VS Code extension restarts it at window start. Manual: `agent-ensure`.
+- Per recorded review it keeps watcher slot (page: green **Agent watching**), repairs heartbeat
+  gaps after sleep or restart, starts one CLI run per comment batch or Ship it click. Run active:
+  amber **Agent working**, threads show who writes.
+- Each run is fresh process of recorded CLI, whole context as text on stdin. No saved session
+  needed. Comments arriving during a run wait for next run.
+- Outcome decides, not exit code: every batch thread answered or resolved; Ship it result
+  recorded. Else one retry, then page shows reason with log path and **Start watching** to retry.
+  New reviewer message also retries. `agent-status` shows state, last log.
+- **Start watching** also attaches reviews with no recorded agent: recorded CLI, else
+  `setup --agent`, else first installed. Runner missing: page says so; `agent-ensure`.
+- **Close** stops run and releases review. Ship it stops comment run, starts ship run.
+- Unattended permissions: each CLI's own automatic approval review. Codex `--approve-for-me`
+  (workspace-write sandbox, local network); Claude Code `--permission-mode auto`. User changes
+  them: `setup --agent-args claude '--permission-mode acceptEdits'`. Runs never get more push,
+  merge or deploy rights than Ship it gives.
 
-```bash
-python3 review.py watch-start REVIEW_ID --state /path/to/.local/watch.json --author Codex
-python3 review.py watch --state /path/to/.local/watch.json --timeout 45
-```
+### Inside a background run
 
-- `watch-start` records review ownership. Run it from task working dir. Codex
-  (`CODEX_THREAD_ID`) and Claude Code (`CLAUDE_CODE_SESSION_ID`) sessions auto-detected with
-  working dir and state-file dir, so PrePR can resume this same session. Other agents may pass
-  `--session ID` (owner reference only; not resumable).
-- `watch` polls local API/DB. Returns new or changed open threads with original anchors, earlier
-  snapshots included. No new comments: `waiting`; repeat while review active.
-- `comments` batch: read context, answer, make requested scoped fixes, test, reply with
-  `reply --author`. Republish pinned manifest after code changes. Then `watch-ack --state ...`.
-  Unacked batches replay after interruption; check existing replies before redoing work.
-  Comments arriving during edits wait for next batch.
-- Report activity so user sees whose turn. Returned batch auto-marks its threads `reply` (page:
-  "<author> is writing a reply…", top light amber **Agent working**). Before editing code:
-  `watch-activity --state ... --activity code` (optional repeatable `--thread ID`; default current
-  batch). Answer-only again: `--activity reply`. `watch-ack` returns idle (green **Agent watching**).
-  Interrupted before ack: `watch-activity --state ... --activity idle`. Never leave stale `code` or
-  `reply` while waiting for user.
-- Page derives each open thread's turn: agent message last shows "Waiting for your reply"; newer
-  user message shows "Waiting for <author>".
-- Longer work: `watch-heartbeat --state ...` at least once per minute. Page stops showing agent
-  watching after two minutes without heartbeat.
-- Waits capped at 50 seconds. Use yielding tools so user messages can interrupt. Never end turn
-  while claiming to monitor. One idle poll is not review completion.
-- Stop when user says done/stop, or helper returns `stopped`, `expired` or `replaced`. Chat stop or
-  task switch: `watch-stop --state ...` if possible; record pending work. API failure: report it;
-  never loop forever.
-- Check heartbeat before each new edit/reply batch. `closed`: user pressed Close; review archived
-  read-only in Completed (user may delete it later). Stop comment work, keep local work, publish
-  nothing remotely.
-  `ship_requested`: leave comment watching, enter Ship it handoff. Both decisions beat pending
-  comments; finish in-flight file write safely, then stop review work.
-- Idle review shows **Start watching**, including reviews with no registered session. Click waits
-  in the service up to 30 seconds; first VS Code window with the extension claims it. No window:
-  page says VS Code did not answer; launch failure: page shows the reason. Host resumes
-  saved Codex/Claude session; absent session starts `codex exec` with saved review context. A missing
-  Codex session falls back once, before any thread starts; other failures show an error.
-- Host saves context, manifest and watcher state in VS Code extension storage. New session reads
-  that context and applicable AGENTS.md, preserves review ID, branches and pinned baselines, then
-  uses the supplied state path. Sandbox includes review worktrees and context directory; local
-  network enabled. No new permissions to push, merge or deploy come from starting a watcher.
-- Start prompt received (`PrePR review ID: ...`): `watch-start` with supplied state file, then handle
-  comments or Ship it as usual. Background Codex run has no chat: answer only in PrePR threads,
-  never ask in chat; unclear request: reply in thread, leave open. No new comment for 30 minutes:
-  `watch-stop` and end, so **Start watching** can wake you again.
-- Never claim a shell watcher wakes a finished agent; only the user's button click does.
+Prompt starts "You are ..., the unattended background agent". It is whole briefing; follow it.
+
+- No chat. Answer only in PrePR threads or recorded ship result. Unclear: ask in thread, leave open.
+- Runner owns watcher: no `watch-start`, `watch`, `watch-ack`, `watch-stop`, `agent-*`. Only
+  `watch-activity --state ... --activity code` before editing code.
+- Handle listed batch, then end. No waiting for more comments.
 
 ## Ship it handoff
 
@@ -145,9 +132,10 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
 - Decision already `shipped` or `blocked`: report recorded result; never rerun. `reconcile` true:
   earlier attempt may have pushed or opened PRs. Inspect local commits, remote branches, existing
   PRs first. Reuse matching PRs; never blindly create again.
-- `python3 review.py ship-verify --state ...` before pushing. Checks HEAD and scoped file hashes
-  against clicked snapshot; review commits already made, so HEAD should match. Changed: stop
-  shipping, ask for fresh local review. Never stretch approval to edits after the click.
+- `python3 review.py ship-verify --state ...` right after claim: before pushing, before tests or
+  builds (generated untracked files count as changes). Checks HEAD and scoped file hashes against
+  clicked snapshot; review commits already made, so HEAD should match. Changed: stop shipping,
+  record `blocked`. Never stretch approval to edits after the click.
 - Ship from review PR branches; never create new branches at ship time. First commit any remaining
   in-scope uncommitted changes from approved snapshot. Then push each PR branch as-is (squash only
   if repo convention requires).
@@ -161,8 +149,12 @@ python3 review.py watch --state /path/to/.local/watch.json --timeout 45
   Failure: `--status blocked` with reason and any PRs already created; report partial completion
   in chat. Neither result resumes comment watching. Retry of blocked work needs later user
   request; inspect existing remote work first.
-- Queued request cannot wake finished agent. On explicit return to original session,
-  `watch-start` surfaces saved decision instead of restarting comment polling.
+- Runner starts ship run on click. Run cannot ask: missing target, wrong remote, failed check or
+  changed worktree end as `blocked` with reason.
+- Ship run failed twice: page shows reason; **Start watching** retries. User asks in chat to finish
+  stuck Ship it instead: `agent-stop REVIEW_ID`, then
+  `watch-start REVIEW_ID --state /path/watch.json --author NAME` returns `ship_requested`;
+  continue with `ship-claim` above.
 
 ## Task ended in chat
 
@@ -178,11 +170,12 @@ Keep PrePR in step with what happened. Review must not stay **Active** once its 
 - User drops or finishes task in chat without PR (abandon, keep local, done): `python3 review.py
   close REVIEW_ID` (same as **Close** button).
 - Partial PRs or failure: no `mark-sent`; report in chat, leave review open.
-- Both stop the watcher; then stop watching.
+- Both release review from background agent.
 
 ## Boundaries
 
-Keep `.local/data` and backups private, untracked: they hold source snapshots and comments. Preserve
-them during updates or moves. Comments trigger work only during accepted live review. Local review
+Keep `.local/data`, `.local/agents` and backups private, untracked: they hold source snapshots,
+comments, task context and run logs. Preserve them during updates or moves. Comments trigger work
+only on reviews handed to background agent or attached with **Start watching**. Local review
 is not hosted PR approval. Publishing alone authorizes no GitHub/ADO writes; **Ship it** supplies
 scoped PR request. Neither authorizes deployment or merge.

@@ -17,7 +17,10 @@ def init(db):
         db.execute("ALTER TABLE review_watchers ADD COLUMN agent TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE review_watchers ADD COLUMN cwd TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE review_watchers ADD COLUMN roots TEXT NOT NULL DEFAULT '[]'")
-    # Start watching click, relayed to VS Code host. One per review.
+    # Runner gave up: reason shown on page until next start.
+    if 'error' not in columns:
+        db.execute("ALTER TABLE review_watchers ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+    # Start watching click, relayed to host runner. One per review.
     db.execute("CREATE TABLE IF NOT EXISTS review_starts(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, requested REAL NOT NULL, claimed REAL, error TEXT NOT NULL DEFAULT '')")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
     # Keep renamed Close: migrate old rows.
@@ -71,9 +74,13 @@ def decide(db, rid, data):
         if existing:
             if existing['action'] == action and existing['snapshot_id'] == latest: return existing
             raise ValueError('Review already closed')
+        attached = watcher(db, rid)
         db.execute('INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES(?,?,?,?,?)',
                    (rid,uuid.uuid4().hex,latest,action,'closed' if action=='close' else 'requested'))
         db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
+        # Ship it with no agent attached: ask host runner for one, same as Start watching.
+        if action == 'ship' and not (attached and attached['active']):
+            db.execute("INSERT OR REPLACE INTO review_starts(review_id,id,requested,claimed,error) VALUES(?,?,?,NULL,'')", (rid, uuid.uuid4().hex, time.time()))
         return decision(db, rid)
     if action == 'sent':
         # PRs sent from chat, not Ship it button: record result. Upgrades closed.
@@ -110,26 +117,32 @@ def watcher(db, rid):
     active = not row['stopped'] and row['updated'] > time.time()-120 and not decision(db,rid)
     resumable = row['agent'] in ('codex', 'claude') and bool(row['session'])
     return {'author': row['author'], 'active': active, 'activity': row['activity'] if active else 'idle',
-            'threads': json.loads(row['activity_threads']) if active else [], 'agent': row['agent'], 'resumable': resumable}
+            'threads': json.loads(row['activity_threads']) if active else [], 'agent': row['agent'], 'resumable': resumable,
+            'error': row['error']}
 
 
 def resume_target(db, rid):
-    # Host starts or resumes; page never receives session IDs.
+    # Host runner attaches; page never receives session IDs.
     snapshot = db.execute('SELECT payload FROM snapshots WHERE review_id=? ORDER BY id DESC LIMIT 1', (rid,)).fetchone()
     if snapshot is None: raise LookupError('Review not found')
     closed = decision(db, rid)
     if closed and closed['status'] not in ('requested', 'preparing'): raise ValueError('Review already completed')
     payload = json.loads(snapshot['payload'])
     repos = [{k:r[k] for k in ('name', 'source', 'branch', 'base', 'include', 'exclude') if k in r} for r in payload['repos']]
+    # Explicit move/copy sources, so a rebuilt manifest republishes the same pairs.
+    comparisons = [{'repo': r['name'], 'path': f['path'], 'fromRepo': f['oldRepo'], 'fromPath': f['oldPath']}
+                   for r in payload['repos'] for f in r['files'] if f.get('oldRepo')]
     roots = list(dict.fromkeys(r['source'] for r in repos if r.get('source', '').startswith('/')))
     if not roots: raise ValueError('Review has no local repository paths')
     row = db.execute('SELECT * FROM review_watchers WHERE review_id=?', (rid,)).fetchone()
-    saved = row is not None and row['agent'] in ('codex', 'claude') and bool(row['session'])
-    return {'author': row['author'] if saved else 'Codex', 'agent': row['agent'] if saved else 'codex',
+    # Unknown agent: runner picks an installed CLI.
+    saved = row is not None and row['agent'] in ('codex', 'claude')
+    return {'author': row['author'] if saved else '', 'agent': row['agent'] if saved else '',
             'session': row['session'] if saved else '', 'cwd': row['cwd'] if saved and row['cwd'] else roots[0],
             'roots': list(dict.fromkeys(roots + (json.loads(row['roots']) if saved else []))),
             'active': bool(row is not None and watcher(db, rid)['active']), 'decision': closed,
-            'review': {'id': rid, 'title': payload.get('title', rid), 'description': payload.get('description', ''), 'repos': repos}}
+            'review': {'id': rid, 'title': payload.get('title', rid), 'description': payload.get('description', ''), 'repos': repos,
+                       'comparisons': comparisons}}
 
 
 # Host must answer within ANSWER seconds; claim stays open until CLAIM.
@@ -158,7 +171,7 @@ def start(db, rid, data):
     action = data.get('action')
     if action == 'request':
         target = resume_target(db, rid)
-        if target['active']: raise ValueError(f"{target['author']} is already watching")
+        if target['active']: raise ValueError(f"{target['author'] or 'An agent'} is already watching")
         db.execute("INSERT OR REPLACE INTO review_starts(review_id,id,requested,claimed,error) VALUES(?,?,?,NULL,'')", (rid, uuid.uuid4().hex, time.time()))
         return start_status(db, rid)
     row = db.execute('SELECT * FROM review_starts WHERE review_id=?', (rid,)).fetchone()
@@ -184,7 +197,8 @@ def resume_info(data):
     # Validate resume fields; empty when agent unknown.
     agent, session, cwd, roots = data.get('agent', ''), data.get('session', ''), data.get('cwd', ''), data.get('roots', [])
     if agent not in ('', 'codex', 'claude'): raise ValueError('Invalid agent')
-    if agent and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{7,99}', session or ''): raise ValueError('Invalid session reference')
+    # Session optional: background runner has none.
+    if agent and session and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{7,99}', session): raise ValueError('Invalid session reference')
     path = lambda p: isinstance(p, str) and p.startswith('/') and len(p) <= 500 and '\0' not in p
     if cwd and not path(cwd): raise ValueError('Invalid working directory')
     if not isinstance(roots, list) or len(roots) > 20 or not all(path(r) for r in roots): raise ValueError('Invalid writable roots')
@@ -206,6 +220,13 @@ def watch(db, rid, data):
         return {'status': 'stopped'}
     token = data.get('token', '')
     if not isinstance(token, str) or not re.fullmatch(r'[a-f0-9]{32}', token): raise ValueError('Invalid watcher token')
+    if action == 'fail':
+        # Runner gave up after retries; page shows reason and offers Start watching.
+        error = data.get('error', '')
+        if not isinstance(error, str) or not 1 <= len(error.strip()) <= 500: raise ValueError('Invalid watcher error')
+        if row is None or row['token'] != token: return {'status': 'replaced'}
+        db.execute("UPDATE review_watchers SET stopped=1,activity='idle',activity_threads='[]',error=? WHERE review_id=?", (error.strip(), rid))
+        return {'status': 'failed'}
     active = watcher(db, rid)
     if action == 'start':
         if active and active['active'] and row['token'] != token: raise ValueError('Another working agent is watching this review')
@@ -213,6 +234,7 @@ def watch(db, rid, data):
         if not isinstance(author, str) or not 1 <= len(author.strip()) <= 100: raise ValueError('Invalid watcher author')
         if not isinstance(session, str) or len(session)>200: raise ValueError('Invalid session reference')
         agent, cwd, roots = resume_info(data)
+        # Replace row: earlier runner error clears.
         db.execute("INSERT OR REPLACE INTO review_watchers(review_id,token,author,session,updated,stopped,activity,activity_threads,agent,cwd,roots) VALUES(?,?,?,?,?,0,'idle','[]',?,?,?)", (rid,token,author.strip(),session,time.time(),agent,cwd,roots))
         db.execute('DELETE FROM review_starts WHERE review_id=?', (rid,))
     elif action in ('heartbeat', 'activity'):

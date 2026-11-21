@@ -14,13 +14,13 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.goto(url+'/__host');
  const f=page.frameLocator('#f');
  await f.getByRole('button',{name:'Comment on after line 1',exact:true}).waitFor();
- // Click waits in service for a VS Code host; no host message, no vscode:// link.
+ // Click waits in service for the host agent runner; no host message, no vscode:// link.
  await f.getByRole('button',{name:'Start watching',exact:true}).click();
- await f.getByText('Starting watcher · waiting for VS Code…',{exact:true}).waitFor();
+ await f.getByText('Starting background agent…',{exact:true}).waitFor();
  assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0,'no double click');
  assert.ok((await (await fetch(url+'/api/resume-requests')).json()).reviews.includes(id));
  assert.equal((await post('/api/reviews/'+id+'/resume',{action:'claim'})).status,'claimed');
- await f.getByText('Starting Codex…',{exact:true}).waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
+ await f.getByText('Starting agent…',{exact:true}).waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
  assert.equal(await page.evaluate(()=>msgs.some(m=>m.type==='prepr:resume')),false);
  await page.waitForFunction(()=>msgs.some(m=>m.type==='prepr:location'&&m.title==='Embedded review'));
  await f.getByRole('link',{name:'PrePR on GitHub'}).click();
@@ -35,19 +35,19 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await f.getByRole('button',{name:/^Discussion/}).click();await dialog.getByRole('button',{name:'Discard'}).click();
  await f.getByText('Comment discarded',{exact:true}).waitFor();assert.equal(await f.getByRole('textbox',{name:'Comment on after line 1'}).count(),0);
  await f.getByRole('button',{name:/^Discussion/}).click();await f.getByRole('heading',{name:'Review discussion'}).waitFor();
- // Agent away + comment waiting: banner offers Resume, posts to host.
+ // Agent away + comment waiting: banner offers Start watching.
  await post('/api/reviews/'+id+'/watch',{action:'start',token:'b'.repeat(32),author:'Codex',agent:'codex',session:'0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee',cwd:'/tmp',roots:['/tmp']});
- await f.getByText('Codex · working session watching',{exact:true}).waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
+ await f.getByText('Codex · watching',{exact:true}).waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'stop'});
  const snap=(await (await fetch(url+'/api/reviews/'+id)).json()).snapshot;
  await post('/api/threads',{snapshot:snap,repo:'app',path:'demo.py',side:'new',line:1,author:'Reviewer',body:'Still there?'});
  await f.getByText("Codex isn't watching · 1 comment waiting",{exact:true}).waitFor();
  await f.getByRole('button',{name:'Start watching'}).click({timeout:20000});
- await f.getByText('Starting watcher · waiting for VS Code…',{exact:true}).waitFor();
+ await f.getByText('Starting background agent…',{exact:true}).waitFor();
  // Host failure shown beside a retry button.
  const claim=await post('/api/reviews/'+id+'/resume',{action:'claim'});assert.equal(claim.session,'0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
- await post('/api/reviews/'+id+'/resume',{action:'fail',request:claim.request,error:'watcher exited with code 1.'});
- await f.getByText('Watcher did not start · watcher exited with code 1.',{exact:true}).waitFor();
+ await post('/api/reviews/'+id+'/resume',{action:'fail',request:claim.request,error:'codex CLI not found on PATH'});
+ await f.getByText('Agent did not start · codex CLI not found on PATH',{exact:true}).waitFor();
  assert.equal(await f.getByRole('button',{name:'Start watching'}).isEnabled(),true,'retry offered');
  assert.equal((await (await fetch(url+'/api/reviews/'+id+'/watch')).text()).includes('0199aaaa'),false,'session hidden from page');
  await post('/api/reviews/'+id+'/decision',{action:'close'});

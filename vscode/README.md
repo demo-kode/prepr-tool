@@ -9,13 +9,10 @@ Same PrePR page (Files, Commits, Discussion, Close, Ship it), in a slicker VS Co
 - Or run **PrePR: Open review…** / **PrePR: Show all reviews** from the Command Palette.
 - Agents open reviews for you: `vscode://demo-kode.prepr/open?review=ID`.
 
-Click **Start watching** on an idle review. PrePR resumes the saved session or starts Codex
-with the review context automatically. The indicator turns green when the agent attaches.
-Startup output appears in the **PrePR** log.
-
-The click works from any tab showing the review, also VS Code's built-in browser or an external
-one: the extension checks the local service every 2 seconds for clicks and the first window
-answers. After updating the extension run **Developer: Reload Window**.
+Agents run in the background on your machine (`review.py agent-run`, started by the agent at
+handoff). The extension starts no agent. It keeps that runner up: at window start, and when a
+**Start watching** click finds none. Output: **PrePR** log. Settings `prepr.toolPath` (PrePR folder,
+set at install) and `prepr.pythonPath`. After updating the extension run **Developer: Reload Window**.
 
 One tab per review, so parallel tasks sit side by side. Opening a review again brings its tab
 forward. Tabs come back after a restart.

@@ -23,7 +23,7 @@ def agent_session():
     return '', ''
 
 
-def start(api, url, rid, path, author, session=None):
+def start(api, url, rid, path, author, session=None, resume=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', rid): raise ValueError('Invalid review ID')
     path = Path(path)
     previous = json.loads(path.read_text()) if path.exists() else {}
@@ -32,9 +32,9 @@ def start(api, url, rid, path, author, session=None):
     agent, detected = agent_session()
     state = {**previous, 'review': rid, 'url': url, 'author': author, 'token': uuid.uuid4().hex,
              'session': session or detected, 'seen': previous.get('seen', {})}
-    # Resume info lets PrePR wake this same session later.
-    resume = {'agent': agent if state['session'] == detected and detected else '', 'cwd': os.getcwd(),
-              'roots': [str(path.resolve().parent)]}
+    # Agent kind and dirs let PrePR restart the right CLI. Runner passes its own.
+    resume = resume or {'agent': agent if state['session'] == detected and detected else '', 'cwd': os.getcwd(),
+                        'roots': [str(path.resolve().parent)]}
     result=api(url, '/api/reviews/'+rid+'/watch', {'action':'start', **{k:state[k] for k in ['token','author','session']}, **resume})
     save(path, state)
     return {**result, 'review':rid, 'url':url+'/?review='+rid}

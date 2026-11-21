@@ -49,12 +49,15 @@ CONTENT_TYPES = '''<?xml version="1.0" encoding="utf-8"?>
 
 def build(out_dir):
     pkg = json.loads((HERE / 'package.json').read_text())
+    # Installed copy knows where review.py lives: extension keeps agent runner up from there.
+    pkg['contributes']['configuration']['properties']['prepr.toolPath']['default'] = str(HERE.parent)
     out = Path(out_dir) / f"{pkg['name']}-{pkg['version']}.vsix"
     out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('[Content_Types].xml', CONTENT_TYPES)
         z.writestr('extension.vsixmanifest', manifest(pkg))
-        for name in FILES:
+        z.writestr('extension/package.json', json.dumps(pkg, indent=2) + '\n')
+        for name in FILES[1:]:
             z.write(HERE / name, 'extension/' + name)
     return out, f"{pkg['publisher']}.{pkg['name']}"
 

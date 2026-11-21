@@ -8,11 +8,13 @@
 <p align="center"><sub>Demo code and fictional feedback.</sub></p>
 
 Local review page for coding-agent changes. Agent publishes change set (one or more repos),
-opens page, answers line comments from same conversation. **Ship it** makes agent open the PRs.
+opens page, hands review to a background agent. Comment on a line: same CLI (Codex or Claude Code)
+starts headless, answers, fixes. **Ship it** makes it open the PRs. No prompting, no chat left
+spinning while it waits.
 
 ## Setup
 
-Needs Docker with Compose, Git, Python 3.12+.
+Needs Docker with Compose, Git, Python 3.12+. Background agent: Linux or macOS, Codex CLI or Claude Code.
 
 ```bash
 git clone https://github.com/demo-kode/prepr-tool.git
@@ -49,19 +51,20 @@ External links go to your browser. Page may be framed only by itself and VS Code
 ## Flow
 
 1. Work with agent as usual. Change set ready: agent creates PR branch in each affected repo,
-   commits there (local only), writes manifest, publishes, offers to open PrePR.
-2. Accept. Page opens (VS Code tab or browser). Top-right light green: **Agent watching**. Amber: **Agent working**
-   (writing replies or changing code).
+   commits there (local only), writes manifest, publishes, hands review to background agent with
+   task context as text, offers to open PrePR. Its chat turn ends there.
+2. Accept. Page opens (VS Code tab or browser). Top-right light green: **Agent watching**
+   (host runner, no model running). Amber: **Agent working** (writing replies or changing code).
 3. Comment on a line (click line number) or whole file.
-4. Agent replies per thread, fixes code when asked, runs checks, commits fix round locally,
-   republishes. Each open thread shows whose turn: *waiting for agent*, *agent writing reply /
+4. Runner starts same CLI in background for that batch. It replies per thread, fixes code when
+   asked, runs checks, commits fix round locally, republishes, exits. Each open thread shows whose turn: *waiting for agent*, *agent writing reply /
    changing code*, *waiting for your reply*. Resolved threads collapse to one line (**Show**).
    **Open updated diff** loads new snapshot. Earlier threads stay visible on new code and in
    **Discussion**.
 5. Finish, top right:
    - **Close**: stop watching, leave local changes as they are, move review to **Completed**
      (read-only).
-   - **Ship it**: agent pushes PR branches, opens real PRs (one per affected repo) for exact
+   - **Ship it**: background agent pushes PR branches, opens real PRs (one per affected repo) for exact
      snapshot shown. Never merges or deploys. Done: review moves to **Completed** with green
      **PR submitted** token.
 
@@ -74,14 +77,29 @@ PRs sent from chat instead of **Ship it**: agent runs `review.py mark-sent ID --
 Home page: **Active** and **Completed** tabs. Completed reviews stay archived until you delete
 them (trash icon).
 
-Click **Start watching** to connect an agent. PrePR resumes its saved session or starts Codex
-with the review context when no session is available. No prompt copying or session setup.
-Works from any tab: VS Code panel, VS Code built-in browser, external browser. The click waits in
-the service; an open VS Code window with the PrePR extension picks it up within seconds. No window
-answers: page says so; open or reload VS Code and retry.
-The indicator turns green when the agent attaches. Startup errors show on the page and in VS Code's
-**PrePR** output.
-No live watch also works: tell agent to read feedback when done commenting.
+### Background agent
+
+```bash
+python3 review.py agent-start REVIEW_ID --manifest review.json --context-file context.md   # agent runs this
+python3 review.py agent-status [REVIEW_ID]     # runner up? state, last run log
+python3 review.py agent-stop REVIEW_ID         # release review
+python3 review.py agent-ensure                 # start runner by hand
+```
+
+- Runner: one small host process, no model. Polls local service, keeps watcher slot of each
+  recorded review, survives sleep and restarts. Started by `agent-start` (systemd user unit when
+  available, else detached); VS Code extension brings it back at window start.
+- Comment batch or Ship it click: runner starts recorded CLI fresh, whole context on stdin (task
+  context from working agent, review, repos, manifest, threads, rules). No saved session involved.
+- Run answered nothing or recorded no ship result: one retry, then page shows reason and log path
+  with **Start watching** to retry. Logs and prompts: `.local/agents/reviews/ID/runs/`.
+- **Start watching** also attaches a review nobody handed over: recorded CLI, else
+  `setup --agent codex|claude`, else first installed. Page says when no runner answers.
+- Unattended permissions = each CLI's own automatic approval review: Codex `--approve-for-me`
+  (workspace-write sandbox plus local network), Claude Code `--permission-mode auto`. Change:
+  `python3 review.py setup --agent-args claude '--permission-mode acceptEdits'`.
+
+No background agent also works: tell agent in chat to read feedback when done commenting.
 
 ## Page
 
@@ -132,7 +150,7 @@ python3 review.py open REVIEW_ID                # VS Code tab if installed, else
 
 ## Data
 
-Snapshots hold your source code. Keep `.local` private, untracked. Keep service on loopback:
+Snapshots hold your source code; `.local/agents` holds task context, prompts, run logs. Keep `.local` private, untracked. Keep service on loopback:
 no authentication. Reviews survive container rebuilds.
 
 ## Development

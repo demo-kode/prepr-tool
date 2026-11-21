@@ -2,7 +2,7 @@
   "name": "prepr",
   "displayName": "PrePR",
   "description": "Review agent changes before the pull request, in a slicker VS Code tab.",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "demo-kode",
   "icon": "media/icon.png",
   "galleryBanner": {
@@ -46,7 +46,7 @@
       },
       {
         "command": "prepr.openReview",
-        "title": "Open review…",
+        "title": "Open review\u2026",
         "category": "PrePR"
       }
     ],
@@ -58,10 +58,15 @@
           "default": "http://127.0.0.1:18744",
           "description": "PrePR service URL."
         },
-        "prepr.codexPath": {
+        "prepr.toolPath": {
           "type": "string",
-          "default": "codex",
-          "description": "Codex CLI used to resume a Codex agent in the background."
+          "default": "",
+          "description": "PrePR folder holding review.py. Set at install by `review.py vscode-install`. Used to keep the background agent runner up."
+        },
+        "prepr.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python used to start the background agent runner."
         }
       }
     }

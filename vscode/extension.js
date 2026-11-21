@@ -3,14 +3,11 @@
 const vscode = require('vscode');
 const crypto = require('crypto');
 const cp = require('child_process');
-const fs = require('fs');
 const path = require('path');
 
 // One tab per review (key = review ID; '' = home). Parallel tasks stay side by side.
 const panels = new Map();
-const resuming = new Map(); // review ID -> background Codex process
 let log = null;
-let storageDirectory = null;
 
 function base() {
   return vscode.workspace.getConfiguration('prepr').get('url', 'http://127.0.0.1:18744').replace(/\/+$/, '');
@@ -57,7 +54,7 @@ window.addEventListener('message',e=>{
   const m=e.data||{};
   if(e.source===frame.contentWindow){
     if(m.type==='prepr:location'){vscode.setState({src:m.href});vscode.postMessage(m);}
-    else if(m.type==='prepr:open-external'||m.type==='prepr:resume')vscode.postMessage(m);
+    else if(m.type==='prepr:open-external')vscode.postMessage(m);
     return;
   }
   if(m.type==='navigate'){frame.src=m.src;frame.focus();}
@@ -73,8 +70,7 @@ function attach(p, key) {
   if (iconUri) p.iconPath = iconUri;
   p.onDidDispose(() => { for (const [k, v] of panels) if (v === p) panels.delete(k); });
   p.webview.onDidReceiveMessage(m => {
-    if (m?.type === 'prepr:resume' && typeof m.review === 'string') resume(m.review);
-    else if (m?.type === 'prepr:open-external' && /^https?:\/\//.test(m.url || '')) vscode.env.openExternal(vscode.Uri.parse(m.url));
+    if (m?.type === 'prepr:open-external' && /^https?:\/\//.test(m.url || '')) vscode.env.openExternal(vscode.Uri.parse(m.url));
     else if (m?.type === 'prepr:location' && typeof m.title === 'string') {
       // In-page navigation (home -> review) moves tab to new key.
       const key = keyOf(m.href);
@@ -104,113 +100,23 @@ async function open(review, snapshot) {
   p.webview.html = html(p.webview, src);
 }
 
-function resumePrompt(review, target, contextFile, stateFile) {
-  return `PrePR review ${review}: the user clicked Start watching. Use the prepr-review skill. ` +
-    `Read the saved review context at ${JSON.stringify(contextFile)} and applicable AGENTS.md files. ` +
-    `The context records the service URL, repository paths, branches, pinned baselines and reusable manifest. ` +
-    `Run watch-start for this review with state file ${JSON.stringify(stateFile)} and author ${target.agent === 'claude' ? 'Claude Code' : 'Codex'}. ` +
-    'Read existing feedback, answer each open thread there, and watch continuously in this session. ' +
-    'Use yielding waits; keep heartbeat current during work. Stop after 30 idle minutes or when review closes. ' +
-    'Handle a pending Ship it request through the skill; otherwise do not push, create PRs, merge or deploy. ' +
-    'Preserve the review ID, baselines, worktrees and unrelated edits. Reply in PrePR threads, not chat. ' +
-    `Review title: ${JSON.stringify(target.review?.title || review)}.`;
+// Agents run on the host: review.py agent-run watches reviews and starts the CLI. Extension only keeps it up.
+let lastEnsure = 0;
+function ensureRunner(reason) {
+  const cfg = vscode.workspace.getConfiguration('prepr'), tool = cfg.get('toolPath', '');
+  if (!tool || Date.now() - lastEnsure < 10000) return false;
+  lastEnsure = Date.now();
+  let child, output = '';
+  try { child = cp.spawn(cfg.get('pythonPath', 'python3'), [path.join(tool, 'review.py'), '--url', base(), 'agent-ensure'], {cwd: tool, stdio: ['ignore', 'pipe', 'pipe']}); }
+  catch (e) { log?.info(`Agent runner (${reason}): cannot start: ${e.message}`); return false; }
+  const collect = chunk => { output = (output + String(chunk)).slice(-2000); };
+  child.stdout.on('data', collect); child.stderr.on('data', collect);
+  child.on('error', e => log?.info(`Agent runner (${reason}): cannot start: ${e.message}. Check prepr.pythonPath and prepr.toolPath.`));
+  child.on('exit', code => log?.info(`Agent runner (${reason}): ${code ? 'failed: ' : ''}${output.replace(/\s+/g, ' ').trim()}`));
+  return true;
 }
 
-function codexArgs(target, prompt) {
-  const roots = [...new Set(target.roots.filter(r => path.isAbsolute(r)))];
-  // Same sandbox as working sessions: write task dirs, reach local PrePR API.
-  return ['exec', ...(target.session ? ['resume'] : []), '--json', '--skip-git-repo-check',
-    '-c', 'sandbox_mode="workspace-write"',
-    '-c', 'sandbox_workspace_write.network_access=true',
-    '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`,
-    ...(target.session ? [target.session] : []), prompt];
-}
-
-async function post(pathname, body) {
-  const r = await fetch(base() + pathname, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: AbortSignal.timeout(5000)});
-  const result = await r.json();
-  if (!r.ok) throw Error(result.error || `HTTP ${r.status}`);
-  return result;
-}
-
-// Wake the same agent session that watched this review.
-// claim: page click relayed by service; first VS Code window wins.
-async function resume(review, claim = false) {
-  if (!/^[A-Za-z0-9_-]+$/.test(review)) return;
-  let target;
-  try {
-    if (claim) target = await post(`/api/reviews/${review}/resume`, {action: 'claim'});
-    else {
-      const r = await fetch(`${base()}/api/reviews/${review}/resume`, {signal: AbortSignal.timeout(5000)});
-      target = await r.json();
-      if (!r.ok) throw Error(target.error || `HTTP ${r.status}`);
-    }
-  } catch (e) { vscode.window.showErrorMessage(`PrePR: cannot resume agent: ${e.message}`); return; }
-  if (claim && target.status !== 'claimed') return;
-  // Page shows why nothing started. No-op once the watcher attached.
-  const report = message => {
-    if (target.request) post(`/api/reviews/${review}/resume`, {action: 'fail', request: target.request, error: message.slice(0, 500)}).catch(() => {});
-  };
-  const fail = (message, showLog) => {
-    log?.info(`[${review}] ${message}`);
-    vscode.window.showErrorMessage(`PrePR: ${message}`, ...(showLog ? ['Show log'] : [])).then(p => p && log?.show());
-    report(message);
-  };
-  if (target.active) { vscode.window.showInformationMessage(`PrePR: ${target.author} is already watching.`); return; }
-  if (resuming.has(review)) { vscode.window.showInformationMessage(`PrePR: watcher is already starting.`); return; }
-  let prompt;
-  try {
-    const directory = path.join(storageDirectory, review);
-    fs.mkdirSync(directory, {recursive: true, mode: 0o700});
-    const contextFile = path.join(directory, 'context.json'), stateFile = path.join(directory, 'watch.json');
-    const manifestFile = path.join(directory, 'review.json');
-    const saved = target.review || {id: review, title: review, repos: []};
-    const manifest = {...saved, repos: saved.repos.map(({source, ...r}) => ({...r, path: source}))};
-    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n', {mode: 0o600});
-    fs.writeFileSync(contextFile, JSON.stringify({url: base(), review: saved, manifestFile, stateFile}, null, 2) + '\n', {mode: 0o600});
-    target = {...target, roots: [...target.roots, directory]};
-    prompt = resumePrompt(review, target, contextFile, stateFile);
-  } catch (e) { fail(`cannot save review context: ${e.message}`); return; }
-  if (target.agent === 'claude') {
-    const q = new URLSearchParams({session: target.session, prompt}).toString();
-    log?.info(`Resume ${review}: Claude Code session ${target.session}`);
-    const opened = await vscode.env.openExternal(vscode.Uri.parse(`${vscode.env.uriScheme}://anthropic.claude-code/open?${q}`));
-    if (opened === false) fail('cannot open the Claude Code session.');
-    return;
-  }
-  if (target.agent !== 'codex') { fail(`unknown agent ${JSON.stringify(target.agent)}.`); return; }
-  const cwd = target.cwd && path.isAbsolute(target.cwd) && fs.existsSync(target.cwd) ? target.cwd : undefined;
-  if (!cwd) { fail('review working directory is unavailable.'); return; }
-  const bin = vscode.workspace.getConfiguration('prepr').get('codexPath', 'codex');
-  function launch(session) {
-    log?.info(`${review}: codex exec${session ? ' resume ' + session : ''} (cwd ${cwd})`);
-    let child, output = '', started = false;
-    try { child = cp.spawn(bin, codexArgs({...target, session}, prompt), {cwd, stdio: ['ignore', 'pipe', 'pipe']}); }
-    catch (e) { fail(`cannot start Codex: ${e.message}`); return; }
-    resuming.set(review, child);
-    const line = chunk => {
-      output = (output + String(chunk)).slice(-65536);
-      started ||= /"type"\s*:\s*"thread.started"/.test(output);
-      String(chunk).split('\n').filter(Boolean).forEach(l => log?.info(`[${review}] ${l}`));
-    };
-    child.stdout.on('data', line); child.stderr.on('data', line);
-    child.on('error', e => { resuming.delete(review); fail(`cannot start Codex (${e.message}). Set prepr.codexPath.`); });
-    child.on('exit', code => {
-      resuming.delete(review);
-      log?.info(`[${review}] Codex exited ${code}`);
-      if (code && session && !started && /(?:no (?:saved )?(?:session|rollout|conversation|thread).*?found|(?:session|rollout|conversation|thread).*?(?:not found|does not exist))/i.test(output)) {
-        log?.info(`[${review}] Saved session unavailable; starting with review context.`);
-        launch(''); return;
-      }
-      if (code) fail(`watcher exited with code ${code}.`, true);
-      else report('Codex ended without attaching to the review.');
-    });
-  }
-  launch(target.session);
-  vscode.window.showInformationMessage('PrePR: starting review watcher in background.', 'Show log').then(p => p && log?.show());
-}
-
-// Page clicks wait in the service: built-in and external browsers cannot reach this host directly.
+// Start watching click waits in the service. Runner claims it; nobody claimed yet: make sure a runner exists.
 let polling = false, pollTimer = null, stopped = false;
 async function poll() {
   if (polling) return false;
@@ -218,7 +124,7 @@ async function poll() {
   try {
     const r = await fetch(`${base()}/api/resume-requests`, {signal: AbortSignal.timeout(3000)});
     if (!r.ok) return false;
-    for (const review of (await r.json()).reviews || []) if (typeof review === 'string') await resume(review, true);
+    if (((await r.json()).reviews || []).length) ensureRunner('Start watching');
     return true;
   } catch { return false; } finally { polling = false; }
 }
@@ -239,7 +145,6 @@ async function pickReview() {
 }
 
 function activate(context) {
-  storageDirectory = context.globalStorageUri.fsPath;
   iconUri = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
   // Status bar button: always-visible entry point.
   const item = vscode.window.createStatusBarItem('prepr.status', vscode.StatusBarAlignment.Left, 100);
@@ -252,8 +157,6 @@ function activate(context) {
     // vscode://demo-kode.prepr/open?review=ID[&snapshot=N]
     vscode.window.registerUriHandler({handleUri(uri) {
       const q = new URLSearchParams(uri.query);
-      // vscode://demo-kode.prepr/resume?review=ID (from browser page)
-      if (uri.path === '/resume') return q.get('review') && resume(q.get('review'));
       const review = q.get('review'), snapshot = q.get('snapshot');
       if (review && !/^[A-Za-z0-9_-]+$/.test(review)) return;
       return open(review || undefined, /^\d+$/.test(snapshot || '') ? snapshot : undefined);
@@ -266,9 +169,12 @@ function activate(context) {
       p.webview.html = html(p.webview, src);
     }}),
   );
+  // Reviews recorded before a reboot: runner picks them up again.
+  ensureRunner('startup');
   stopped = false; schedule(1000);
 }
 
-function deactivate() { stopped = true; clearTimeout(pollTimer); for (const child of resuming.values()) child.kill(); }
+// Runner outlives the window on purpose.
+function deactivate() { stopped = true; clearTimeout(pollTimer); }
 
-module.exports = {activate, deactivate, pagePath, html, keyOf, codexArgs, resumePrompt, poll};
+module.exports = {activate, deactivate, pagePath, html, keyOf, ensureRunner, poll};

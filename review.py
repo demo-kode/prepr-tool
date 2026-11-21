@@ -371,10 +371,21 @@ def main():
         if command=='ship-result':
             p.add_argument('--status',required=True,choices=['shipped','blocked']);p.add_argument('--body',required=True)
     sub.add_parser('list')
+    p = sub.add_parser('agent-start', help='Hand review to background agent: same CLI answers comments and Ship it, no chat polling')
+    p.add_argument('review'); p.add_argument('--manifest', type=Path, help='Review manifest; default: rebuilt from latest snapshot')
+    p.add_argument('--context-file', help='Task context as text for every background run; - reads stdin')
+    p.add_argument('--agent', choices=['codex', 'claude'], help='Default: CLI running this command')
+    p.add_argument('--author'); p.add_argument('--cwd', type=Path, help='Agent working dir; default: current')
+    p = sub.add_parser('agent-status', help='Runner state, recorded reviews, last run log'); p.add_argument('review', nargs='?')
+    p = sub.add_parser('agent-stop', help='Release review from background agent'); p.add_argument('review')
+    sub.add_parser('agent-ensure', help='Start agent runner unless already running')
+    sub.add_parser('agent-run', help='Agent runner in foreground (agent-ensure starts it detached)')
     p = sub.add_parser('setup', help='Show or record first-run choices: VS Code panel, PR platform access')
     p.add_argument('--vscode', choices=['installed', 'declined'])
     p.add_argument('--pr-platform', choices=PR_PLATFORMS)
     p.add_argument('--pr-access', help='How agent reaches PR platform: CLI, account, org/project, target branch')
+    p.add_argument('--agent', choices=['codex', 'claude'], help='Background agent for reviews with no recorded CLI')
+    p.add_argument('--agent-args', nargs=2, metavar=('AGENT', 'FLAGS'), help="Permission flags for background runs, e.g. claude '--permission-mode acceptEdits'; '' restores default")
     sub.add_parser('vscode-install', help='Build and install the PrePR VS Code extension')
     p = sub.add_parser('close', help='Close review without PR (same as Close button)')
     p.add_argument('review')
@@ -383,7 +394,20 @@ def main():
     p = sub.add_parser('open', help='Open review: VS Code panel when installed, else browser')
     p.add_argument('review'); p.add_argument('--snapshot', type=int)
     args = parser.parse_args()
-    if args.command.startswith('ship-'):
+    if args.command.startswith('agent-'):
+        import review_agent
+        if args.command == 'agent-run': review_agent.run(api, args.url, load_setup); return
+        if args.command == 'agent-start':
+            context = None if args.context_file is None else sys.stdin.read() if args.context_file == '-' else Path(args.context_file).read_text()
+            cfg, result = review_agent.register(api, args.url, args.review, args.agent or review_agent.detect(), args.author, args.manifest, context, args.cwd or Path.cwd())
+            result = {'status': result['status'], 'review': args.review, 'agent': cfg['agent'], 'author': cfg['author'],
+                      'context': context is not None or (review_agent.folder(args.review)/'context.md').exists(),
+                      'runner': review_agent.ensure(args.url), 'url': result['url']}
+        elif args.command == 'agent-stop': result = review_agent.unregister(api, args.review)
+        elif args.command == 'agent-ensure': result = {'runner': review_agent.ensure(args.url)}
+        else: result = review_agent.status(args.review)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command.startswith('ship-'):
         import review_watch
         if args.command=='ship-verify': result=review_watch.verify_shipping(args.state,capture_repository)
         else: result=review_watch.ship(api,args.state,'claim' if args.command=='ship-claim' else 'complete' if args.status=='shipped' else 'block',None if args.command=='ship-claim' else args.body)
@@ -430,6 +454,12 @@ def main():
                   **({'access': args.pr_access} if args.pr_access else {})}
             cfg = save_setup(pr=pr)
         if args.vscode: cfg = save_setup(vscode=args.vscode)
+        if args.agent: cfg = save_setup(agent=args.agent)
+        if args.agent_args:
+            import review_agent, shlex
+            if args.agent_args[0] not in review_agent.AUTHORS: raise ValueError('Agent must be codex or claude')
+            flags = {**cfg.get('agentArgs', {}), args.agent_args[0]: shlex.split(args.agent_args[1])}
+            cfg = save_setup(agentArgs={k: v for k, v in flags.items() if v})
         print(json.dumps(setup_status(cfg), indent=2, ensure_ascii=False))
     elif args.command == 'vscode-install':
         print(json.dumps(vscode_install(), indent=2))
