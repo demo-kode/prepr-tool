@@ -100,7 +100,7 @@ python3 review.py agent-ensure                 # start runner by hand
   alive. `agent-status` shows live pid.
 - Turn answered nothing or recorded no ship result: one retry in a clean conversation, then page shows reason and log path
   with **Start watching** to retry. Logs and prompts: `.local/agents/reviews/ID/runs/`.
-- **Start watching** also attaches a review nobody handed over: recorded CLI, else
+- **Start watching** (top bar, beside the indicator, shown while no agent is attached) also attaches a review nobody handed over: recorded CLI, else
   `setup --agent codex|claude`, else first installed. Page says when no runner answers.
 - Unattended permissions = each CLI's own automatic approval review: Codex `--approve-for-me`
   (workspace-write sandbox plus local network), Claude Code `--permission-mode auto`. Change:

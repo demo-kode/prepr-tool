@@ -14,12 +14,19 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  assert.equal(await page.getByRole('button',{name:'Run agent',exact:true}).count(),0);
  assert.equal(await page.locator('#agent-settings').count(),0);
  // No agent runner answering: click stays on page and says why nothing started.
- await page.getByRole('button',{name:'Start watching',exact:true}).click();
+ // Button sits in the top bar beside the indicator, not in the status line.
+ const top=page.locator('.topbar #watcher-indicator + #watcher-action');
+ await top.getByRole('button',{name:'Start watching',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Start watching'}).count(),1);
+ assert.equal(await page.locator('.live-review-status').isVisible(),false,'nothing to say yet: status line hidden');
+ await page.setViewportSize({width:420,height:900});assert.equal(await top.getByRole('button',{name:'Start watching',exact:true}).isVisible(),true,'narrow screen keeps button');await page.setViewportSize({width:1440,height:1000});
+ await top.getByRole('button',{name:'Start watching',exact:true}).click();
  await page.getByText('Starting background agent…',{exact:true}).waitFor();
+ assert.equal(await top.getByRole('button',{name:'Starting…',exact:true}).isDisabled(),true);assert.equal(await page.getByRole('button',{name:'Start watching'}).count(),0);
  await page.getByText('Agent runner did not answer · run `python3 review.py agent-ensure` in the PrePR folder, then retry',{exact:true}).waitFor({timeout:20000});
- assert.equal(await page.getByRole('button',{name:'Start watching',exact:true}).isEnabled(),true);assert.equal(new URL(page.url()).searchParams.get('review'),id);
+ assert.equal(await top.getByRole('button',{name:'Start watching',exact:true}).isEnabled(),true);assert.equal(new URL(page.url()).searchParams.get('review'),id);
+ assert.equal(await page.locator('.live-review-status button').count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'start',token,author:'Codex',session:'fixture-session'});
- await page.getByText('Codex · watching',{exact:true}).waitFor();
+ await page.getByText('Codex · watching',{exact:true}).waitFor();assert.equal(await top.locator('button').count(),0,'watching: no button');
  // Runner gave up: reason on page, retry offered; next start clears it.
  await post('/api/reviews/'+id+'/watch',{action:'fail',token,error:'Codex run failed: codex exited with code 1 · log /tmp/x.log'});
  await page.getByText('Codex run failed: codex exited with code 1 · log /tmp/x.log',{exact:true}).waitFor();
@@ -56,6 +63,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.waitForURL(new RegExp('snapshot='+updated.snapshot));
  await page.getByRole('button',{name:'Close',exact:true}).click();
  await page.getByText('Review closed · moved to Completed',{exact:true}).waitFor();await page.waitForURL(url+'/?tab=completed');
+ assert.equal(await top.locator('button').count(),0,'home page: no button');
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  assert.equal((await post('/api/reviews/'+id+'/watch',{action:'heartbeat',token})).status,'closed');
  const closed=page.locator('.review-item',{has:page.getByText(id,{exact:true})});await closed.locator('.status-token.closed',{hasText:'Closed'}).waitFor();
@@ -82,5 +90,5 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.route('**/api/reviews/*/watch',route=>route.abort());
  await page.locator('#watcher-indicator').getByText('Status unavailable',{exact:true}).waitFor();
  assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
- assert.deepEqual(errors,[]);console.log('PASS: unanswered start click explained, runner failure shown with retry, live replies/drafts, agent activity badges/LED, snapshot updates, Close archives to Completed, delete, PR submitted token, Ship it, closed comments, pending offline handoff and PR result.');
+ assert.deepEqual(errors,[]);console.log('PASS: Start watching in top bar beside indicator, unanswered start click explained, runner failure shown with retry, live replies/drafts, agent activity badges/LED, snapshot updates, Close archives to Completed, delete, PR submitted token, Ship it, closed comments, pending offline handoff and PR result.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
