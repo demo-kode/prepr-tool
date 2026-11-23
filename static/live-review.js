@@ -51,12 +51,20 @@
       for(const button of document.querySelectorAll('.review-ship'))button.disabled=!!result.decision;
       for(const button of document.querySelectorAll('.review-close'))button.disabled=!!result.decision;
       for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
+      const editable = () => state.draft || document.querySelector('.composer, dialog[open]') ||
+        document.activeElement?.matches('input,select,textarea');
+      const current = state.review;
+      const stillFollowing = () => holder.isConnected && state.review === current && !current.decision &&
+        current.snapshot === current.snapshots[0].id && !editable();
+      if (result.latestSnapshot > current.snapshot && stillFollowing()) {
+        await openReview(rid, undefined, undefined, stillFollowing);
+        return;
+      }
       let feedback;
       if(result.watcher){
-        const current=state.review;
         feedback=await api('/api/reviews/'+rid+'/feedback');
         if(!holder.isConnected||state.review!==current)return;
-        if(!state.draft&&!document.querySelector('.composer')&&!document.activeElement?.matches('input,select,textarea')&&
+        if(!editable()&&
            (state.tab!=='files'||state.file)&&JSON.stringify(feedback.threads)!==JSON.stringify(state.review.threads)){
           const panel=document.querySelector('.main-panel'),top=panel?.scrollTop,left=panel?.scrollLeft;
           state.review.threads=feedback.threads;renderShell();
@@ -76,6 +84,7 @@
         if(canStart&&['requested','preparing'].includes(d.status)){if(w0?.error)holder.append(el('span','agent-away',w0.error));holder.append(...startNotes(w0?.author,result.start));}
         return;
       }
+      if(result.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
       if(!result.watcher){holder.append(...startNotes('',result.start));return;}
       if(result.watcher.active){
         holder.append(el('span','',`${result.watcher.author} · ${result.watcher.activity==='idle'?'watching':result.watcher.activity==='code'?'changing code':'writing replies'}`));
@@ -83,7 +92,6 @@
         // Runner gave up: its reason replaces the plain idle note.
         holder.append(el('span',waiting||w0.error?'agent-away':'',w0.error||(waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`)),...startNotes(w0.author,result.start));
       }
-      if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
     }catch(e){if(holder.isConnected){holder.textContent=e.message;submission.offline();indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}
   }
   globalThis.PreprLive={refresh:()=>setTimeout(refresh,0),decide:async action=>{

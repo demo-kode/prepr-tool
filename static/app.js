@@ -72,14 +72,25 @@ function canNavigate() {
 }
 window.addEventListener('beforeunload', event=>{if(state.draft){event.preventDefault();event.returnValue='';}});
 function setLocation() { const url=new URL(location); url.search=''; url.searchParams.set('review',state.review.id); url.searchParams.set('snapshot',state.review.snapshot); if(state.selected) {url.searchParams.set('repo',state.selected.repo);url.searchParams.set('file',state.selected.path);} history.replaceState(null,'',url); hostPost({type:'prepr:location',title:state.review.title,href:url.href}); }
-async function openReview(id, snapshot, selection) {
-  state.review=await api(`/api/reviews/${encodeURIComponent(id)}${snapshot?`?snapshot=${snapshot}`:''}`);
+let pendingReview = null;
+async function openReview(id, snapshot, selection, stillFollowing) {
+  if (stillFollowing && pendingReview) return;
+  const request = api(`/api/reviews/${encodeURIComponent(id)}${snapshot?`?snapshot=${snapshot}`:''}`);
+  pendingReview = request;
+  try {
+    const review = await request;
+    if (pendingReview !== request || (stillFollowing && !stillFollowing())) return;
+    state.review = review;
+  } finally {
+    if (pendingReview === request) pendingReview = null;
+  }
   if(selection) state.selected=selection;
   if(!state.selected || !state.review.repos.some(r=>r.name===state.selected.repo && r.files.some(f=>f.path===state.selected.path))) {
     const shown=shownFile,r=state.review.repos.find(r=>r.files.some(shown))||state.review.repos.find(r=>r.files.length);
     state.selected=r?{repo:r.name,path:(r.files.find(shown)||r.files[0]).path}:null;
   }
   setLocation(); renderShell();
+  if (stillFollowing) toast(`Opened updated diff · Snapshot ${snapshotNumber(state.review.snapshot)}`);
   if(state.tab==='files') await loadFile(); else renderOther();
 }
 async function refresh() { if(!canNavigate())return; await openReview(state.review.id,state.review.snapshot); toast('Comments refreshed'); }

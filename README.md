@@ -59,7 +59,7 @@ External links go to your browser. Page may be framed only by itself and VS Code
 4. Runner starts same CLI in background for that batch. It replies per thread, fixes code when
    asked, runs checks, commits fix round locally, republishes, exits. Each open thread shows whose turn: *waiting for agent*, *agent writing reply /
    changing code*, *waiting for your reply*. Resolved threads collapse to one line (**Show**).
-   **Open updated diff** loads new snapshot. Earlier threads stay visible on new code and in
+   The latest diff follows new snapshots automatically. A draft delays the switch until you post or cancel it. Select an earlier snapshot to keep reading that version. Earlier threads stay visible on new code and in
    **Discussion**.
 5. Finish, top right:
    - **Close**: stop watching, leave local changes as they are, move review to **Completed**

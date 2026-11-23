@@ -262,7 +262,11 @@ class Handler(BaseHTTPRequestHandler):
         watch_match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/watch', path)
         if watch_match:
             if method == 'POST': return live_review.watch(db, watch_match[1], data)
-            if method == 'GET': return {'watcher': live_review.watcher(db, watch_match[1]),'decision':live_review.decision(db,watch_match[1]),'start':live_review.start_status(db,watch_match[1])}
+            if method == 'GET':
+                rid = watch_match[1]
+                latest = db.execute('SELECT max(id) FROM snapshots WHERE review_id=?', (rid,)).fetchone()[0]
+                return {'watcher': live_review.watcher(db, rid), 'decision': live_review.decision(db, rid),
+                        'start': live_review.start_status(db, rid), 'latestSnapshot': latest}
         if method == 'GET' and path == '/api/health':
             return {'ok': True}
         assets = {

@@ -34,7 +34,7 @@ fs.mkdirSync(artifactDir,{recursive:true});
  assert.equal(await page.locator('.thread').count(),1);
  const payload=structuredClone(fixture);payload.repos[0].files[0].new='// new line\nlocals {\n  timeout = 180\n  mode = "thorough"\n}\n';
  const snapshot=await (await fetch(url+'/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
- await page.goto(`${url}/?review=${reviewId}`);await page.getByRole('button',{name:/^Discussion/}).click();
+ await page.waitForURL(new RegExp('snapshot='+snapshot.snapshot));await page.getByRole('heading',{name:'Review discussion'}).waitFor();
  await page.getByRole('button',{name:/Snapshot 1 \(earlier\)/}).click();await page.locator('.thread .carried-note',{hasText:'Snapshot 1'}).waitFor();await page.getByText('Why increase the timeout?',{exact:false}).waitFor();
  assert.equal(await page.getByText('You’re viewing an earlier snapshot.',{exact:false}).count(),0);await page.getByRole('button',{name:/old.txt/}).click();
  await page.getByRole('button',{name:'Comment on before line 1',exact:true}).click();await page.getByRole('textbox',{name:'Comment on before line 1'}).fill('Why remove this?');await page.getByRole('button',{name:'Post comment',exact:true}).click();await page.getByText('Why remove this?',{exact:true}).waitFor();
