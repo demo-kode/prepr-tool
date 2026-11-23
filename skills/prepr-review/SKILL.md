@@ -88,7 +88,8 @@ README has manifest fields and startup commands.
 - Answer: `python3 review.py reply THREAD_ID 'Answer or verified change' --author NAME`. Change code and run
   checks when asked. Commit each fix round locally as own commit (e.g.
   `review: tighten timeout validation (PrePR THREAD_ID)`), republish, cite short SHA in reply.
-  Answer-only: no commit. Resolve only addressed threads; leave uncertain questions open.
+  For answer-only questions and follow-ups, reply and leave the thread open. The reviewer resolves it when finished.
+  Resolve a change request after its requested fix is complete and republished.
   `resolve THREAD_ID --reopen` undoes resolution.
 - Republish same manifest after fixes. Comments stay on original code; never silently reassigned.
   Discussion view includes earlier threads.

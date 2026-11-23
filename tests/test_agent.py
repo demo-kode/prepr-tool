@@ -112,6 +112,24 @@ class AgentTests(unittest.TestCase):
             self.assertLess(time.time(), deadline, 'turn finished'); time.sleep(.05); self.sup.tick()
     def last_author(self, tid): return [t for t in self.api('/api/reviews/demo/feedback')['threads'] if t['id'] == tid][0]['messages'][-1]['author']
 
+    def test_reviewer_can_follow_up_before_resolving_a_question(self):
+        self.register()
+        tid = self.comment('Why is the timeout configurable?')
+        for question in (None, 'What happens if I leave it unset?'):
+            if question:
+                self.api(f'/api/threads/{tid}/messages', {'author':'Reviewer', 'body':question})
+            self.run_job()
+            prompt = self.calls()[-1]['prompt']
+            self.assertIn('leave the thread open for the reviewer to resolve', prompt)
+            self.assertIn('republished the change requested in that thread', prompt)
+            thread, = self.api('/api/reviews/demo/feedback')['threads']
+            self.assertEqual((thread['id'], thread['status'], thread['messages'][-1]['author']), (tid, 'open', 'Codex'))
+            self.sup.tick()
+            self.assertFalse(self.sup.jobs)
+        review.api(self.url, f'/api/threads/{tid}', {'status':'resolved'}, 'PATCH')
+        self.assertEqual(self.api('/api/reviews/demo/feedback')['threads'][0]['status'], 'resolved')
+        self.assertEqual(len(self.calls()), 2)
+
     def test_comment_starts_same_cli_with_whole_context_as_text(self):
         cfg, result = self.register(context='User wants timeout configurable. Run make test.')
         self.assertEqual((result['status'], cfg['agent'], cfg['author']), ('watching', 'codex', 'Codex'))
