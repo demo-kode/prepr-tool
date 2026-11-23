@@ -41,6 +41,7 @@ def act(prompt, session):
     if mode == 'reply-stop': subprocess.run(cli + ['watch-stop', '--state', state], check=True, capture_output=True)
     if mode == 'ship':
         subprocess.run(cli + ['ship-claim', '--state', state], check=True, capture_output=True)
+        subprocess.run(cli + ['ship-progress', '--state', state, '--repo', 'app', '--stage', 'opened'], check=True, capture_output=True)
         subprocess.run(cli + ['ship-result', '--state', state, '--status', 'shipped', '--body', 'app: https://example.invalid/pr/1'], check=True, capture_output=True)
 wanted = next((argv[i+1] for i, a in enumerate(argv) if a in ('resume', '--resume')), '')
 if wanted and wanted not in (open(known).read().split() if os.path.exists(known) else []):
@@ -168,6 +169,7 @@ class AgentTests(unittest.TestCase):
         for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'ship-verify --state', 'Never merge. Never deploy.']:
             self.assertIn(text, call['prompt'])
         decision = self.view()['decision']; self.assertEqual((decision['status'], decision['result']), ('shipped', 'app: https://example.invalid/pr/1'))
+        self.assertEqual(decision['progress']['repos'], {'app':'opened'})
         cfg = review_agent.load('demo'); self.assertEqual((cfg['state'], cfg['reason']), ('done', 'ship shipped'))
         self.sup.tick(); self.assertEqual(len(self.calls()), 1)
         self.assertFalse(running(call['pid']), 'review over: its CLI is gone'); self.assertEqual((self.sup.live, 'live' in cfg), ({}, False))

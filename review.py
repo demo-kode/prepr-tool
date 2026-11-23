@@ -366,8 +366,11 @@ def main():
     p = sub.add_parser('watch-activity', help='Show agent work on threads: reply, code or idle')
     p.add_argument('--state', required=True, type=Path); p.add_argument('--activity', required=True, choices=['reply','code','idle'])
     p.add_argument('--thread', action='append', help='Thread ID; default: current comment batch')
-    for command in ['ship-claim','ship-verify','ship-result']:
+    for command in ['ship-claim','ship-verify','ship-progress','ship-result']:
         p=sub.add_parser(command);p.add_argument('--state',required=True,type=Path)
+        if command=='ship-progress':
+            p.add_argument('--repo', required=True)
+            p.add_argument('--stage', required=True, choices=['checking','checked','pushing','pushed','creating','opened'])
         if command=='ship-result':
             p.add_argument('--status',required=True,choices=['shipped','blocked']);p.add_argument('--body',required=True)
     sub.add_parser('list')
@@ -410,7 +413,11 @@ def main():
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command.startswith('ship-'):
         import review_watch
-        if args.command=='ship-verify': result=review_watch.verify_shipping(args.state,capture_repository)
+        if args.command=='ship-verify':
+            result=review_watch.verify_shipping(args.state,capture_repository)
+            review_watch.shipping_progress(api,args.state,'verified')
+        elif args.command=='ship-progress':
+            result=review_watch.shipping_progress(api,args.state,args.stage,args.repo)
         else: result=review_watch.ship(api,args.state,'claim' if args.command=='ship-claim' else 'complete' if args.status=='shipped' else 'block',None if args.command=='ship-claim' else args.body)
         print(json.dumps(result,indent=2,ensure_ascii=False))
     elif args.command.startswith('watch'):

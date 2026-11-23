@@ -253,6 +253,10 @@ PR platform access as recorded by the user: {access}
 3. `{tool} ship-verify --state {state}` right after the claim: before any push and before tests, builds or anything else that can write files into the worktrees (new untracked files count as changes). It fails when a worktree differs from the approved snapshot: then record blocked with that reason and end.
 4. Ship from the review branches listed above. No new branches. Commit remaining in-scope uncommitted changes of the approved snapshot first, then push each branch as it is (squash only when the repository convention requires it).
 5. Follow each repository's PR instructions, templates and required checks. Checks must leave the worktrees as approved: remove files they generate. One PR per affected repository, from its review branch to its target branch. Put `PrePR request: {decision['id']}` in every PR description.
+   Report live status with `{tool} ship-progress --state {state} --repo NAME --stage STAGE` for each approved repo.
+   Send checking when required checks start and checked when they pass, before pushing.
+   Send pushing before its push and pushed after remote confirmation. Send creating before opening its PR and opened once the PR exists.
+   On retry, report the confirmed stage of existing branches and PRs.
 6. Record the verified result: `{tool} ship-result --state {state} --status shipped --body 'Repository: PR URL'` (one line per repository).
 7. Anything that stops you (remote disagrees with the recorded platform, missing target, failed checks, missing credentials): `{tool} ship-result --state {state} --status blocked --body 'reason, plus PRs already created'`. You cannot ask anyone; a clear blocked reason is the answer.
 8. Never merge. Never deploy. Then end.

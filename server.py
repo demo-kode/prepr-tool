@@ -266,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'GET' and path == '/api/health':
             return {'ok': True}
         assets = {
-            '/live-review.js': 'live-review.js', '/extra-grammars.js': 'extra-grammars.js', '/languages.js': 'languages.js', '/highlight.js': 'highlight.js',
+            '/submission.js': 'submission.js', '/live-review.js': 'live-review.js', '/extra-grammars.js': 'extra-grammars.js', '/languages.js': 'languages.js', '/highlight.js': 'highlight.js',
             '/highlight-worker.js': 'highlight-worker.js', '/vendor/shiki.js': 'vendor/shiki.js',
         }
         if method == 'GET' and path in assets:

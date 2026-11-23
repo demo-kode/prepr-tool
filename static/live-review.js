@@ -36,12 +36,16 @@
       const result=await api('/api/reviews/'+rid+'/watch');
       if(!holder.isConnected||state.review?.id!==rid)return;
       lastCheck=Date.now();
+      // A poll started before the click can still return the open review.
+      if (!result.decision && state.review.decision?.action==='ship') return;
+      submission.update(state.review,result);
       const watching=!!result.watcher?.active&&!result.decision,w=watching?result.watcher:null,busy=!!w&&w.activity!=='idle';
       const doing=busy?`${w.activity==='code'?'changing code':'writing a reply'} for ${w.threads.length} thread${w.threads.length===1?'':'s'}`:'';
       // Offer start when nobody is attached and the review still needs an agent.
       const offer=!result.watcher?.active&&(!result.decision||['requested','preparing'].includes(result.decision.status));
       const action=!offer?'':['requested','starting'].includes(result.start?.status)?'starting':'start';
-      indicator(watching,busy?'Agent working':watching?'Agent watching':'Not watching',busy?`${w.author} is ${doing}`:watching?`${w.author} is watching this review`:'No agent is watching this review',busy,action,rid);
+      const shipping=result.decision?.status==='preparing'&&!result.watcher?.error;
+      indicator(watching||shipping,shipping?'Submitting PRs':busy?'Agent working':watching?'Agent watching':'Not watching',busy?`${w.author} is ${doing}`:watching?`${w.author} is watching this review`:shipping?'Working agent is submitting pull requests':'No agent is watching this review',busy||shipping,action,rid);
       state.watcher=w;paintActivity();
       state.review.decision=result.decision;
       for(const button of document.querySelectorAll('.review-ship'))button.disabled=!!result.decision;
@@ -67,6 +71,7 @@
       if(result.decision){
         const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
+        if(d.action==='ship')holder.append(btn('Submission details',submission.show));
         if(d.result)holder.append(el('span','',d.result));
         if(canStart&&['requested','preparing'].includes(d.status)){if(w0?.error)holder.append(el('span','agent-away',w0.error));holder.append(...startNotes(w0?.author,result.start));}
         return;
@@ -79,11 +84,12 @@
         holder.append(el('span',waiting||w0.error?'agent-away':'',w0.error||(waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`)),...startNotes(w0.author,result.start));
       }
       if(feedback?.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
-    }catch(e){if(holder.isConnected){holder.textContent=e.message;indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}
+    }catch(e){if(holder.isConnected){holder.textContent=e.message;submission.offline();indicator(false,'Status unavailable','Unable to check the working agent');}}finally{refreshing=false;}
   }
   globalThis.PreprLive={refresh:()=>setTimeout(refresh,0),decide:async action=>{
     if(!canNavigate())return;
     const rid=state.review.id;
+    if(action==='ship'){await submission.request(state.review);await refresh();return;}
     await api('/api/reviews/'+rid+'/decision',{action,snapshot:state.review.snapshot});
     // Close archives review; show Completed tab.
     if(action==='close'){lastCheck=0;watchedReview=null;indicator(false,'Not watching','No review open');state.review=null;history.replaceState(null,'','/?tab=completed');await home('completed');toast('Review closed · moved to Completed');return;}

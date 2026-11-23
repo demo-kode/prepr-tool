@@ -107,6 +107,13 @@ def ship(api, path, action, result=None):
     return response
 
 
+def shipping_progress(api, path, stage, repo=None):
+    state = json.loads(Path(path).read_text())
+    request = json.loads(Path(path).with_suffix('.ship.json').read_text())['decision']['id']
+    return api(state['url'], '/api/reviews/'+state['review']+'/decision',
+               {'action':'progress', 'request':request, 'token':state['token'], 'repo':repo, 'stage':stage})
+
+
 def verify_shipping(path, capture):
     approved=json.loads(Path(path).with_suffix('.ship.json').read_text())
     for stored in approved['payload']['repos']:

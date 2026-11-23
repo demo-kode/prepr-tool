@@ -159,6 +159,8 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
   Failure: `--status blocked` with reason and any PRs already created; report partial completion
   in chat. Neither result resumes comment watching. Retry of blocked work needs later user
   request; inspect existing remote work first.
+- Report branch and PR work with `review.py ship-progress --state ... --repo NAME --stage STAGE`.
+  Send checking/checked around required checks, pushing/pushed around the push and creating/opened around PR submission.
 - Runner starts ship run on click. Run cannot ask: missing target, wrong remote, failed check or
   changed worktree end as `blocked` with reason.
 - Ship run failed twice: page shows reason; **Start watching** retries. User asks in chat to finish

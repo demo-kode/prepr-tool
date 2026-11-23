@@ -65,7 +65,8 @@ External links go to your browser. Page may be framed only by itself and VS Code
    - **Close**: stop watching, leave local changes as they are, move review to **Completed**
      (read-only).
    - **Ship it**: background agent pushes PR branches, opens real PRs (one per affected repo) for exact
-     snapshot shown. Never merges or deploys. Done: review moves to **Completed** with green
+     snapshot shown. A live overlay shows snapshot verification, branch pushes and PR creation by repository.
+     Hide it to keep reading, or reopen **Submission details** for status and PR links. Never merges or deploys. Done: review moves to **Completed** with green
      **PR submitted** token.
 
 Several tasks at once: each gets own review, watcher and PRs; in VS Code each review gets own tab.

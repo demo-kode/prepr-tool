@@ -23,6 +23,8 @@ def init(db):
     # Start watching click, relayed to host runner. One per review.
     db.execute("CREATE TABLE IF NOT EXISTS review_starts(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, requested REAL NOT NULL, claimed REAL, error TEXT NOT NULL DEFAULT '')")
     db.execute('CREATE TABLE IF NOT EXISTS review_decisions(review_id TEXT PRIMARY KEY REFERENCES reviews(id), id TEXT NOT NULL, snapshot_id INTEGER NOT NULL REFERENCES snapshots(id), action TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT \'\', claimed_by TEXT)')
+    if 'progress' not in [r[1] for r in db.execute('PRAGMA table_info(review_decisions)')]:
+        db.execute('ALTER TABLE review_decisions ADD COLUMN progress TEXT')
     # Keep renamed Close: migrate old rows.
     db.execute("UPDATE review_decisions SET action='close' WHERE action='keep'")
     db.execute("UPDATE review_decisions SET status='closed' WHERE status='kept'")
@@ -31,7 +33,15 @@ def init(db):
 def decision(db, rid):
     row = db.execute('SELECT * FROM review_decisions WHERE review_id=?', (rid,)).fetchone()
     if row is None: return None
-    return {k:row[k] for k in ['id','snapshot_id','action','status','result']}
+    result = {k:row[k] for k in ['id','snapshot_id','action','status','result']}
+    if row['progress']:
+        result['progress'] = json.loads(row['progress'])
+    return result
+
+
+def submission_progress(db, snapshot):
+    payload = json.loads(db.execute('SELECT payload FROM snapshots WHERE id=?', (snapshot,)).fetchone()[0])
+    return {'verified': False, 'repos': {r['name']: 'waiting' for r in payload['repos']}}
 
 
 def require_open(db, rid):
@@ -77,6 +87,9 @@ def decide(db, rid, data):
         attached = watcher(db, rid)
         db.execute('INSERT INTO review_decisions(review_id,id,snapshot_id,action,status) VALUES(?,?,?,?,?)',
                    (rid,uuid.uuid4().hex,latest,action,'closed' if action=='close' else 'requested'))
+        if action == 'ship':
+            db.execute('UPDATE review_decisions SET progress=? WHERE review_id=?',
+                       (json.dumps(submission_progress(db, latest)), rid))
         db.execute('UPDATE review_watchers SET stopped=1 WHERE review_id=?', (rid,))
         # Ship it with no agent attached: ask host runner for one, same as Start watching.
         if action == 'ship' and not (attached and attached['active']):
@@ -101,9 +114,22 @@ def decide(db, rid, data):
         db.execute("UPDATE review_decisions SET status='preparing',claimed_by=? WHERE review_id=?", (owner['token'],rid))
         payload = json.loads(db.execute('SELECT payload FROM snapshots WHERE id=?', (existing['snapshot_id'],)).fetchone()[0])
         return {'decision':decision(db,rid),'reconcile':existing['status']=='preparing','payload':payload}
-    if action in ('complete', 'block'):
+    if action in ('progress', 'complete', 'block'):
         row = db.execute('SELECT claimed_by FROM review_decisions WHERE review_id=?', (rid,)).fetchone()
         if existing['status'] != 'preparing' or row['claimed_by'] != owner['token']: raise ValueError('Claim the request before recording a result')
+        if action == 'progress':
+            progress = existing.get('progress') or submission_progress(db, existing['snapshot_id'])
+            stage, repo = data.get('stage'), data.get('repo')
+            if stage == 'verified' and repo is None:
+                progress['verified'] = True
+            else:
+                stages = ('waiting', 'checking', 'checked', 'pushing', 'pushed', 'creating', 'opened')
+                if not isinstance(repo, str) or repo not in progress['repos'] or stage not in stages[1:]:
+                    raise ValueError('Expected an approved repository and a submission stage')
+                if stages.index(stage) > stages.index(progress['repos'][repo]):
+                    progress['repos'][repo] = stage
+            db.execute('UPDATE review_decisions SET progress=? WHERE review_id=?', (json.dumps(progress), rid))
+            return decision(db, rid)
         result = data.get('result','')
         if not isinstance(result,str) or not 1 <= len(result.strip()) <= 10000: raise ValueError('Provide PR links or the blocking reason')
         db.execute('UPDATE review_decisions SET status=?,result=? WHERE review_id=?', ('shipped' if action=='complete' else 'blocked',result.strip(),rid))
