@@ -102,8 +102,9 @@ def ship(api, path, action, result=None):
                  {'action':action,'token':state['token'],'request':current['decision']['id'],'result':result})
     if action=='claim':
         approved=Path(path).with_suffix('.ship.json');save(approved,response)
+        # checks: recorded at publish as passed on this snapshot; verified worktree needs no rerun.
         return {'decision':response['decision'],'reconcile':response['reconcile'],'approvedSnapshotFile':str(approved.resolve()),
-                'repositories':[{k:v for k,v in r.items() if k!='files'} for r in response['payload']['repos']]}
+                'checks':response['payload'].get('checks',''),'repositories':[{k:v for k,v in r.items() if k!='files'} for r in response['payload']['repos']]}
     return response
 
 

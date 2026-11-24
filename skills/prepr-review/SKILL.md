@@ -67,6 +67,12 @@ README has manifest fields and startup commands.
   user or repo rules forbid it; say so.
 - Run `python3 review.py publish /path/to/review.json`. App stopped: `docker compose up -d --build`.
   `publish` itself never checks out, commits or pushes.
+- Record checks with the publish: `--checks 'COMMAND: RESULT'`, one per check, e.g.
+  `--checks 'npm test: 150 passed' --checks 'terraform test: ok'`. Only checks that passed after
+  the last edit, on exactly the published state. Ship it reuses them instead of rerunning, so a
+  false or stale entry ships unchecked code. Edited since: rerun the check or leave it out.
+  Record belongs to that snapshot; later publish without `--checks` has none. Reviewer sees it
+  in the page header.
 - Capture uses Git histogram diffs. Deleted/added text pairs can pair as moves, also across repos.
   Ambiguous pairs stay unpaired.
 - Moved code whose source still exists: add manifest `comparisons` entry with `repo`, `path`,
@@ -87,7 +93,8 @@ README has manifest fields and startup commands.
   or `--author 'Claude Code'`. Other names read as reviewer messages and start a background run.
 - Answer: `python3 review.py reply THREAD_ID 'Answer or verified change' --author NAME`. Change code and run
   checks when asked. Commit each fix round locally as own commit (e.g.
-  `review: tighten timeout validation (PrePR THREAD_ID)`), republish, cite short SHA in reply.
+  `review: tighten timeout validation (PrePR THREAD_ID)`), republish with `--checks` for what
+  passed after the edit, cite short SHA in reply.
   For answer-only questions and follow-ups, reply and leave the thread open. The reviewer resolves it when finished.
   Resolve a change request after its requested fix is complete and republished.
   `resolve THREAD_ID --reopen` undoes resolution.
@@ -128,6 +135,8 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 - No chat. Answer only in PrePR threads or recorded ship result. Unclear: ask in thread, leave open.
 - Runner owns watcher: no `watch-start`, `watch`, `watch-ack`, `watch-stop`, `agent-*`. Only
   `watch-activity --state ... --activity code` before editing code.
+- Ship it: runner already claimed and verified, no model. Never `ship-claim`. `ship-verify` only
+  again after something ran inside a worktree.
 - Handle listed batch, then end turn. No waiting for more comments: runner sends next batch into
   this same conversation ("More work on PrePR review ...").
 - Start nothing that must outlive the turn (servers, watchers): runner ends all your processes.
@@ -138,8 +147,11 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
   branch, open PR from it to its target branch, or update the open PR that branch already has.
   Authorizes that scoped commit/push/PR creation or update only; never merge, deployment or
   public visibility change. Honor remaining explicit user restrictions. Never re-ask for approval the click gave; ask only for missing targets or real conflict.
+- Background run: runner did claim and verify before starting you; prompt says so. Steps below
+  with `ship-claim` and first `ship-verify` are for a Ship it finished from chat.
 - `python3 review.py ship-claim --state ...`. Read `approvedSnapshotFile`: immutable snapshot,
-  repo paths, branch/base, file scope, stable request ID. Keep for recovery.
+  repo paths, branch/base, file scope, stable request ID. Keep for recovery. `checks`: record
+  published with that snapshot.
 - Decision already `shipped` or `blocked`: report recorded result; never rerun. `reconcile` true:
   earlier attempt may have pushed or opened PRs. Inspect local commits, remote branches, existing
   PRs first. Reuse matching PRs; never blindly create again.
@@ -151,9 +163,13 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
   in-scope uncommitted changes from approved snapshot. Then push each PR branch as-is (squash only
   if repo convention requires).
 - Reach PR platform as recorded in `setup` `pr`. Repo remote disagrees with it: ask.
-- Find each repo's remote and target branch from Git/task context. Keep unrelated edits. Run
-  required checks. Create/update one real PR per affected repo from its PR branch. Ship no commits
+- Find each repo's remote and target branch from Git/task context. Keep unrelated edits.
+  Create/update one real PR per affected repo from its PR branch. Ship no commits
   outside this change set. Follow repo PR instructions and templates.
+- Checks: verified worktree holds the bytes the record was made on, so recorded checks stand. Never
+  rerun them, never hunt for more. Run only a check repo PR instructions require before a PR and
+  the record lacks. No record: run what repo instructions or task context name. Run on a copy or
+  remove generated files; anything ran inside a worktree: `ship-verify` again before commit/push.
 - Branch already has an open PR to its target (user iterating on a sent PR): push updates it.
   Never open a second PR. Keep its reviewers, votes and description unless repo instructions differ.
 - Put `PrePR request: REQUEST_ID` in description of each PR you open, so interrupted attempts
@@ -168,8 +184,9 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 - Report branch and PR work with `review.py ship-progress --state ... --repo NAME --stage STAGE`.
   Send checking/checked around required checks, pushing/pushed around the push and creating/opened around PR submission.
   Existing PR updated instead: send updating/updated, never creating/opened. Page then shows **PR updated**, not **PR opened**.
-- Runner starts ship run on click. Run cannot ask: missing target, wrong remote, failed check or
-  changed worktree end as `blocked` with reason.
+- Runner starts ship run on click, after its own claim and verify. Changed worktree: runner
+  records `blocked` itself, no model run. Run cannot ask: missing target, wrong remote or failed
+  check end as `blocked` with reason.
 - Ship run failed twice: page shows reason; **Start watching** retries. User asks in chat to finish
   stuck Ship it instead: `agent-stop REVIEW_ID`, then
   `watch-start REVIEW_ID --state /path/watch.json --author NAME` returns `ship_requested`;

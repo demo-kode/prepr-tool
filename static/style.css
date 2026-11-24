@@ -109,3 +109,7 @@
 .submission-result { font-size: 13px; }
 .submission-result:empty, .submission-note:empty { display: none; }
 #submission footer { display: flex; justify-content: flex-end; margin-top: 20px; }
+/* Checks recorded at publish. */
+.checks { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.checks summary { cursor: pointer; }
+.checks pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

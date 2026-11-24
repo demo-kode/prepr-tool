@@ -34,7 +34,7 @@ const submission = (() => {
     const complete = decision.status === 'shipped';
     const confirmed = entries.filter(([,stage]) => done.includes(stage)).length;
     const messages = {sending:'Sending your request…', requested:'Waiting for the runner',
-      preparing:progress.verified ? 'Snapshot verified' : 'Verifying the approved snapshot',
+      preparing:progress.verified ? 'Snapshot verified · agent starting' : 'Verifying the approved snapshot',
       shipped:'Submission complete', blocked:'Submission blocked', error:'Could not submit request'};
     if (decision.status === 'preparing' && entries.some(([,stage]) => stage !== 'waiting')) {
       messages.preparing = confirmed === entries.length ? 'Recording the PR links' :

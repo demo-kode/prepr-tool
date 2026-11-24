@@ -106,6 +106,8 @@ function renderShell() {
   header.append(el('div','live-review-status'));
   if(globalThis.PreprLive)PreprLive.refresh();
   if(r.description)header.append(el('p','description',r.description));
+  // Checks recorded as passed on this snapshot: Ship it reuses them.
+  if(r.checks){const n=r.checks.split('\n').length,checks=el('details','checks');checks.append(el('summary','',`${n} check${n===1?'':'s'} recorded as passed on this snapshot · Ship it reuses them`),el('pre','',r.checks));header.append(checks);}
   const stats=el('div','meta-line');const add=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.added,0),0), del=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.removed,0),0);
   stats.append(el('span','pill purple','Local review'),el('span','',`${r.repos.length} repositories`),el('span','',`${totalFiles()} changed files`),el('span','plus',`+${add.toLocaleString()}`),el('span','minus',`−${del.toLocaleString()}`));header.append(stats);
   const tabs=el('nav','tabs');const open=r.threads.length;

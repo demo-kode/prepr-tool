@@ -177,4 +177,20 @@ class ReviewTests(unittest.TestCase):
         t=self.api('/api/reviews/task-test/feedback')['threads'][0]
         self.assertEqual((t['side'],t['line'],t['code']),('file',0,''))
 
+    def test_publish_records_checks_only_for_the_snapshot_they_ran_on(self):
+        (self.repo/'a.txt').write_text('one\nchanged\nthree\n')
+        manifest=self.root/'review.json';manifest.write_text(json.dumps({'id':'task-test','title':'Test task','repos':[{'name':'repo','path':str(self.repo),'base':self.base}]}))
+        def publish(*extra):
+            return subprocess.check_output(['python3',str(ROOT/'review.py'),'--url',self.url,'publish',str(manifest),*extra],text=True)
+        self.assertIn('2 checks recorded',publish('--checks','npm test: 150 passed','--checks',' terraform fmt -check: clean '))
+        shown=self.api('/api/reviews/task-test');self.assertEqual(shown['checks'],'npm test: 150 passed\nterraform fmt -check: clean')
+        # Same bytes published again without a record: snapshot and record stay.
+        self.assertIn('(unchanged)',publish());self.assertEqual(self.api('/api/reviews/task-test')['snapshot'],shown['snapshot'])
+        # Edited and republished without a record: the old one does not follow.
+        (self.repo/'a.txt').write_text('one\nchanged again\nthree\n');self.assertNotIn('checks recorded',publish())
+        latest=self.api('/api/reviews/task-test');self.assertEqual(latest['checks'],'');self.assertNotEqual(latest['snapshot'],shown['snapshot'])
+        self.assertEqual(self.api(f'/api/reviews/task-test?snapshot={shown["snapshot"]}')['checks'],shown['checks'])
+        with self.assertRaises(ValueError):self.api('/api/reviews',{**self.payload(),'checks':'x'*10001})
+        with self.assertRaises(ValueError):self.api('/api/reviews',{**self.payload(),'checks':['npm test']})
+
 if __name__=='__main__':unittest.main()

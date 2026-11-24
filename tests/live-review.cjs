@@ -89,8 +89,12 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await closed.getByRole('button',{name:'Delete review'}).click();await page.getByRole('dialog').getByRole('button',{name:'Cancel'}).click();assert.equal(await closed.count(),1);
  await closed.getByRole('button',{name:'Delete review'}).click();await page.getByRole('dialog').getByRole('button',{name:'Delete',exact:true}).click();await page.getByText('Review deleted',{exact:true}).waitFor();
  assert.equal((await fetch(url+'/api/reviews/'+id)).status,404);assert.equal(await closed.count(),0);
- const shipId=id+'-ship';payload.id=shipId;payload.repos.push({...payload.repos[0],name:'worker'});await post('/api/reviews',payload);
- await page.goto(url+'/?review='+shipId);await page.getByRole('button',{name:'Ship it',exact:true}).click();
+ const shipId=id+'-ship';payload.id=shipId;payload.repos.push({...payload.repos[0],name:'worker'});payload.checks='npm test: 150 passed\nterraform test: ok';await post('/api/reviews',payload);
+ await page.goto(url+'/?review='+shipId);
+ // Checks recorded at publish: shown to the reviewer before Ship it reuses them.
+ assert.equal(await page.locator('.checks summary').textContent(),'2 checks recorded as passed on this snapshot · Ship it reuses them');
+ await page.locator('.checks summary').click();assert.equal(await page.locator('.checks pre').textContent(),payload.checks);delete payload.checks;
+ await page.getByRole('button',{name:'Ship it',exact:true}).click();
  await page.getByText('Ship it requested · waiting for the working agent',{exact:true}).waitFor();
  await page.reload();await page.getByText('Ship it requested · waiting for the working agent',{exact:true}).waitFor();
  const overlay=page.getByRole('dialog',{name:'Pull request submission'});
@@ -102,7 +106,8 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await post('/api/reviews/'+shipId+'/decision',{action:'claim',token,request:handoff.decision.id});
  await page.getByText('Working agent preparing pull requests',{exact:true}).waitFor();
  const progress=(repo,stage)=>post('/api/reviews/'+shipId+'/decision',{action:'progress',token,request:handoff.decision.id,repo,stage});
- await progress(null,'verified');await progress('app','checking');
+ await overlay.getByText('Verifying the approved snapshot').waitFor();
+ await progress(null,'verified');await overlay.getByText('Snapshot verified · agent starting').waitFor();await progress('app','checking');
  await overlay.getByText('Running checks').waitFor();
  await progress('app','pushed');await progress('worker','pushing');
  await overlay.getByText('Pushing branch').waitFor();

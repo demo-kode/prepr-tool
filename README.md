@@ -66,6 +66,8 @@ External links go to your browser. Page may be framed only by itself and VS Code
      (read-only).
    - **Ship it**: background agent pushes PR branches, opens real PRs (one per affected repo) for exact
      snapshot shown. Branch already has an open PR: the push updates it, no second PR. A live overlay shows snapshot verification, branch pushes and PR creation by repository.
+     Runner claims and verifies the snapshot itself, no model: about a second. Worktree changed since the click: blocked at once, nothing pushed.
+     Checks recorded at publish (`publish --checks`) passed on those exact bytes: agent reuses them, runs only required ones the record lacks. Header shows the record.
      Each repository ends at **PR opened** (new) or **PR updated** (existing PR received the push).
      Hide it to keep reading, or reopen **Submission details** for status and PR links. Never merges or deploys. Done: review moves to **Completed** with green
      **PR submitted** token.
@@ -150,9 +152,13 @@ Moved/copied files compare against original content, also across repos. Header s
 - Snapshot covers `base` to current worktree: commits, staged, unstaged, untracked files.
 - `include` / `exclude`: optional path globs. `branch` checked, never switched.
 - `comparisons`: optional explicit source for copy or ambiguous move.
+- Checks record: `publish --checks` only, never the manifest. Belongs to that snapshot alone;
+  republish after an edit without it and the new snapshot has none.
 
 ```bash
 python3 review.py publish review.json           # new snapshot (identical content is reused)
+python3 review.py publish review.json --checks 'npm test: 150 passed' --checks 'terraform test: ok'
+                                                # same, plus checks that passed on this exact state
 python3 review.py feedback REVIEW_ID --open     # read open threads
 python3 review.py open REVIEW_ID                # VS Code tab if installed, else browser
 ```

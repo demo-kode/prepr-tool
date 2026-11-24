@@ -40,7 +40,7 @@ def act(prompt, session):
     if mode == 'reply-ack': subprocess.run(cli + ['watch-ack', '--state', state], check=True, capture_output=True)
     if mode == 'reply-stop': subprocess.run(cli + ['watch-stop', '--state', state], check=True, capture_output=True)
     if mode == 'ship':
-        subprocess.run(cli + ['ship-claim', '--state', state], check=True, capture_output=True)
+        # Runner already claimed and verified.
         subprocess.run(cli + ['ship-progress', '--state', state, '--repo', 'app', '--stage', 'opened'], check=True, capture_output=True)
         subprocess.run(cli + ['ship-result', '--state', state, '--status', 'shipped', '--body', 'app: https://example.invalid/pr/1'], check=True, capture_output=True)
 wanted = next((argv[i+1] for i, a in enumerate(argv) if a in ('resume', '--resume')), '')
@@ -88,9 +88,11 @@ class AgentTests(unittest.TestCase):
         patch.start(); self.addCleanup(patch.stop)
         self.mode('reply'); self.now = 1000.0
         self.payload = {'id': 'demo', 'title': 'Agent test', 'description': 'Demo change', 'repos': [{'name': 'app', 'source': str(self.repo), 'branch': 'fix/demo', 'base': 'a'*40, 'head': 'b'*40,
-                        'files': [{'path': 'a.py', 'status': 'M', 'old': 'old\n', 'new': 'new\n'}]}]}
+                        'files': [{'path': 'a.py', 'status': 'M', 'old': 'old\n', 'new': 'new\n', 'newHash': 'reviewed', 'newMode': '100644'}]}]}
         self.sid = self.api('/api/reviews', self.payload)['snapshot']
-        self.sup = review_agent.Supervisor(review.api, self.url, lambda: self.setup, clock=lambda: self.now)
+        # Worktree as the runner finds it at Ship it: same as published unless a test changes it.
+        self.worktree = json.loads(json.dumps(self.payload['repos'][0]))
+        self.sup = review_agent.Supervisor(review.api, self.url, lambda spec: self.worktree, lambda: self.setup, clock=lambda: self.now)
         self.sup.log = lambda *a: None
 
     def tearDown(self):
@@ -122,6 +124,7 @@ class AgentTests(unittest.TestCase):
             prompt = self.calls()[-1]['prompt']
             self.assertIn('leave the thread open for the reviewer to resolve', prompt)
             self.assertIn('republished the change requested in that thread', prompt)
+            self.assertIn("--checks 'COMMAND: RESULT'", prompt)
             thread, = self.api('/api/reviews/demo/feedback')['threads']
             self.assertEqual((thread['id'], thread['status'], thread['messages'][-1]['author']), (tid, 'open', 'Codex'))
             self.sup.tick()
@@ -184,13 +187,58 @@ class AgentTests(unittest.TestCase):
         self.mode('ship'); self.run_job()
         call = self.calls()[0]
         self.assertEqual(call['argv'][1:7], ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']); self.assertIn('auto', call['argv'])
-        for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'ship-verify --state', 'Never merge. Never deploy.', 'send updating instead of creating']:
+        for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'Never merge. Never deploy.', 'send updating instead of creating',
+                     'Never run `ship-claim`', 'Worktrees verified identical', f'app: HEAD {"b"*40} · 1 files in scope', 'First attempt: nothing was pushed',
+                     str(review_agent.folder('demo')/'watch.ship.json'), 'None recorded for this snapshot']:
             self.assertIn(text, call['prompt'])
         decision = self.view()['decision']; self.assertEqual((decision['status'], decision['result']), ('shipped', 'app: https://example.invalid/pr/1'))
-        self.assertEqual(decision['progress']['repos'], {'app':'opened'})
+        self.assertEqual(decision['progress'], {'verified': True, 'repos': {'app':'opened'}}, 'runner verified, CLI never claimed')
         cfg = review_agent.load('demo'); self.assertEqual((cfg['state'], cfg['reason']), ('done', 'ship shipped'))
         self.sup.tick(); self.assertEqual(len(self.calls()), 1)
         self.assertFalse(running(call['pid']), 'review over: its CLI is gone'); self.assertEqual((self.sup.live, 'live' in cfg), ({}, False))
+
+    def test_changed_worktree_blocks_ship_before_any_cli_run(self):
+        self.register(); self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})
+        self.worktree['files'][0]['newHash'] = 'edited after the click'
+        self.mode('ship'); self.sup.tick()
+        decision = self.view()['decision']; self.assertEqual(decision['status'], 'blocked')
+        self.assertIn('app: worktree changed after Ship it', decision['result']); self.assertIn('Nothing was pushed', decision['result'])
+        self.assertFalse(decision['progress']['verified'])
+        cfg = review_agent.load('demo'); self.assertEqual((cfg['state'], cfg['reason'], self.sup.jobs, self.calls()), ('done', 'ship blocked', {}, []))
+        self.sup.tick(); self.assertEqual(self.calls(), [], 'blocked request never reaches a model')
+
+    def test_runner_verifies_real_worktree_with_review_capture(self):
+        import subprocess
+        def git(*args): return subprocess.check_output(['git', '-C', str(self.repo), *args], text=True)
+        git('init', '-q'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid')
+        (self.repo/'a.py').write_text('old\n'); git('add', '.'); git('commit', '-qm', 'base'); base = git('rev-parse', 'HEAD').strip()
+        (self.repo/'a.py').write_text('new\n'); git('commit', '-qam', 'change')
+        self.payload['repos'] = [review.capture_repository({'name': 'app', 'path': str(self.repo), 'base': base})]
+        self.sid = self.api('/api/reviews', self.payload)['snapshot']; self.sup.capture = review.capture_repository
+        self.register(); self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})
+        (self.repo/'left-by-a-build.log').write_text('x\n')
+        self.mode('ship'); self.sup.tick()
+        decision = self.view()['decision']; self.assertEqual((decision['status'], self.calls()), ('blocked', []), 'new untracked file is a change')
+        self.assertIn('worktree changed after Ship it', decision['result'])
+
+    def test_checks_recorded_at_publish_are_not_rerun_at_ship(self):
+        self.payload['checks'] = 'npm test: 150 passed\nterraform test: 12 passed'
+        self.sid = self.api('/api/reviews', self.payload)['snapshot']
+        self.register(); self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})
+        self.mode('ship'); self.run_job(); prompt = self.calls()[0]['prompt']
+        for text in ['   - npm test: 150 passed\n   - terraform test: 12 passed', 'do not rerun them', 'the record lacks it']: self.assertIn(text, prompt)
+        self.assertNotIn('None recorded', prompt); self.assertEqual(self.view()['decision']['status'], 'shipped')
+
+    def test_ship_retry_reconciles_and_leaves_moved_head_to_the_agent(self):
+        self.register(); self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid}); self.mode('silent')
+        self.run_job(); self.assertEqual(self.view()['decision']['status'], 'preparing')
+        # Earlier attempt committed approved changes: HEAD moved. Not blocked by the runner.
+        self.worktree['head'] = 'c'*40; self.mode('ship'); self.run_job()
+        first, retry = [c['prompt'] for c in self.calls()]
+        self.assertIn('First attempt', first); self.assertNotIn('Retry:', first)
+        for text in ['Retry: an earlier attempt may have pushed or opened PRs', 'Runner verification failed on this retry: app: worktree changed after Ship it', 'HEAD moved, file content did not']:
+            self.assertIn(text, retry)
+        self.assertNotIn('Worktrees verified identical', retry); self.assertEqual(self.view()['decision']['status'], 'shipped')
 
     def test_ship_it_alone_attaches_agent_on_unrecorded_review(self):
         self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid})
@@ -201,7 +249,7 @@ class AgentTests(unittest.TestCase):
     def test_failed_ship_waits_for_click(self):
         self.register(); self.api('/api/reviews/demo/decision', {'action': 'ship', 'snapshot': self.sid}); self.mode('silent')
         self.run_job(); self.run_job()
-        self.assertIn('run ended without recording a Ship it result', self.view()['watcher']['error']); self.assertEqual(self.view()['decision']['status'], 'requested')
+        self.assertIn('run ended without recording a Ship it result', self.view()['watcher']['error']); self.assertEqual(self.view()['decision']['status'], 'preparing')
         for _ in range(3): self.sup.tick()
         self.assertEqual(len(self.calls()), 2)
         self.mode('ship'); self.api('/api/reviews/demo/resume', {'action': 'request'}); self.run_job()
@@ -325,7 +373,7 @@ class AgentTests(unittest.TestCase):
     def test_runner_stop_restart_and_new_handoff_end_clis(self):
         self.register('claude', context='old'); self.comment(); self.run_job(); first = self.calls()[0]['pid']
         # Dead runner left its CLI: next runner ends it at start.
-        orphan = self.sup.live.pop('demo'); fresh = review_agent.Supervisor(review.api, self.url, lambda: self.setup, clock=lambda: self.now); fresh.log = lambda *a: None
+        orphan = self.sup.live.pop('demo'); fresh = review_agent.Supervisor(review.api, self.url, None, lambda: self.setup, clock=lambda: self.now); fresh.log = lambda *a: None
         fresh.sweep(); orphan.process.wait(timeout=10); self.assertFalse(running(first)); self.assertNotIn('live', review_agent.load('demo'))
         # Handed over again with new context: CLI of the old conversation ends, next turn gets the new briefing.
         self.comment('again'); self.run_job(); second = self.calls()[1]['pid']; self.assertTrue(running(second))
@@ -341,7 +389,7 @@ class AgentTests(unittest.TestCase):
         with open(review_agent.home()/'runner.lock', 'a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.assertTrue(review_agent.alive())
-            self.assertIs(review_agent.run(review.api, self.url, dict), False)
+            self.assertIs(review_agent.run(review.api, self.url, dict, None), False)
         self.assertFalse(review_agent.alive())
 
 

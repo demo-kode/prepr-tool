@@ -110,6 +110,8 @@ def validate_payload(data):
     required_text(data, 'title', 300)
     if not isinstance(data.get('description', ''), str) or len(data.get('description', '')) > 10000:
         raise ValueError('Description too long')
+    if not isinstance(data.get('checks', ''), str) or len(data.get('checks', '')) > 10000:
+        raise ValueError('Checks record too long')
     repos = data.get('repos')
     if not isinstance(repos, list) or not 1 <= len(repos) <= 50:
         raise ValueError('Provide 1–50 repositories')
@@ -148,9 +150,14 @@ def publish(db, data):
     db.execute('UPDATE reviews SET updated=updated WHERE id=?', (data['id'],))
     payload = json.dumps(data, sort_keys=True, separators=(',', ':'))
     fingerprint = hashlib.sha256(payload.encode()).hexdigest()
-    last = db.execute('SELECT id,fingerprint FROM snapshots WHERE review_id=? ORDER BY id DESC LIMIT 1', (data['id'],)).fetchone()
+    last = db.execute('SELECT id,fingerprint,payload FROM snapshots WHERE review_id=? ORDER BY id DESC LIMIT 1', (data['id'],)).fetchone()
     if last and last['fingerprint'] == fingerprint:
         return {'review': data['id'], 'snapshot': last['id'], 'unchanged': True}
+    if last and not data.get('checks'):
+        # Same bytes again, no record this time: snapshot and its checks record stay.
+        previous = json.loads(last['payload'])
+        if previous.pop('checks', None) and previous == {k: v for k, v in data.items() if k != 'checks'}:
+            return {'review': data['id'], 'snapshot': last['id'], 'unchanged': True}
     live_review.require_open(db,data['id'])
     stamp = now()
     db.execute('''INSERT INTO reviews VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -304,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
                 brief['files'] = [{k:v for k,v in f.items() if k not in ('old', 'new', 'blocks')} for f in r['files']]
                 repos.append(brief)
             viewed = [dict(row) for row in db.execute('SELECT repo,path FROM viewed WHERE snapshot_id=?', (sid,))]
-            return {**dict(review), 'decision':live_review.decision(db,rid), 'snapshot': sid, 'snapshots': versions, 'repos': repos, 'threads': threads(db, rid), 'viewed': viewed}
+            return {**dict(review), 'decision':live_review.decision(db,rid), 'snapshot': sid, 'snapshots': versions, 'checks': payload.get('checks', ''), 'repos': repos, 'threads': threads(db, rid), 'viewed': viewed}
         match = re.fullmatch(r'/api/reviews/([A-Za-z0-9_-]+)/feedback', path)
         if match and method == 'GET':
             latest = db.execute('SELECT max(id) FROM snapshots WHERE review_id=?', (match[1],)).fetchone()[0]

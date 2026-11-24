@@ -353,6 +353,7 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('publish', help='Capture all specified repositories, including uncommitted files')
     p.add_argument('manifest', type=Path)
+    p.add_argument('--checks', action='append', metavar='TEXT', help="Check that passed on exactly this state, e.g. 'npm test: 150 passed'; repeat per check. Ship it reuses them instead of rerunning")
     p = sub.add_parser('feedback', help='Read threads with original code anchors')
     p.add_argument('review'); p.add_argument('--json', action='store_true'); p.add_argument('--open', action='store_true')
     p = sub.add_parser('reply'); p.add_argument('thread'); p.add_argument('body'); p.add_argument('--author', default='Codex')
@@ -400,7 +401,7 @@ def main():
     args = parser.parse_args()
     if args.command.startswith('agent-'):
         import review_agent
-        if args.command == 'agent-run': review_agent.run(api, args.url, load_setup); return
+        if args.command == 'agent-run': review_agent.run(api, args.url, load_setup, capture_repository); return
         if args.command == 'agent-start':
             context = None if args.context_file is None else sys.stdin.read() if args.context_file == '-' else Path(args.context_file).read_text()
             cfg, result = review_agent.register(api, args.url, args.review, args.agent or review_agent.detect(), args.author, args.manifest, context, args.cwd or Path.cwd())
@@ -435,9 +436,12 @@ def main():
         spec = json.loads(args.manifest.read_text())
         repos = prepare_comparisons([capture_repository(r) for r in spec['repos']], spec.get('comparisons', []))
         data = {'id':spec['id'], 'title':spec['title'], 'description':spec.get('description',''), 'repos':repos}
+        # Only from this call, never from the reused manifest: a record must not outlive the state it checked.
+        if args.checks: data['checks'] = '\n'.join(c.strip() for c in args.checks if c.strip())
         result = api(args.url, '/api/reviews', data)
         print(f'{args.url}/?review={result["review"]}')
-        print(f'Snapshot {result["snapshot"]}{" (unchanged)" if result["unchanged"] else ""}: {len(repos)} repos, {sum(len(r["files"]) for r in repos)} files')
+        print(f'Snapshot {result["snapshot"]}{" (unchanged)" if result["unchanged"] else ""}: {len(repos)} repos, {sum(len(r["files"]) for r in repos)} files'
+              + (f', {len(data["checks"].splitlines())} checks recorded' if data.get('checks') else ''))
     elif args.command == 'feedback':
         result = api(args.url, '/api/reviews/' + args.review + '/feedback')
         if args.open:

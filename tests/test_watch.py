@@ -302,7 +302,7 @@ class WatchTests(unittest.TestCase):
         stored=self.payload['repos'][0];stored['files'][0].update(newHash='expected',newMode='100644')
         self.sid=self.api('/api/reviews',self.payload)['snapshot'];self.start()
         self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
-        review_watch.ship(review.api,self.state,'claim')
+        self.assertEqual(review_watch.ship(review.api,self.state,'claim')['checks'],'')
         self.assertEqual(review_watch.verify_shipping(self.state,lambda spec:stored)['status'],'verified')
         changed=json.loads(json.dumps(stored));changed['files'][0]['newHash']='changed'
         with self.assertRaises(ValueError):review_watch.verify_shipping(self.state,lambda spec:changed)
@@ -316,9 +316,10 @@ class WatchTests(unittest.TestCase):
         git('init','-q');git('config','user.name','Test');git('config','user.email','test@example.invalid')
         (root/'a.py').write_text('before\n');git('add','.');git('commit','-qm','base')
         base=git('rev-parse','HEAD').strip();(root/'a.py').write_text('reviewed\n')
-        self.payload['repos']=[review.capture_repository({'name':'app','path':str(root),'base':base})]
+        self.payload['repos']=[review.capture_repository({'name':'app','path':str(root),'base':base})];self.payload['checks']='make test: ok'
         self.sid=self.api('/api/reviews',self.payload)['snapshot'];self.start()
-        self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid});review_watch.ship(review.api,self.state,'claim')
+        self.api('/api/reviews/demo/decision',{'action':'ship','snapshot':self.sid})
+        self.assertEqual(review_watch.ship(review.api,self.state,'claim')['checks'],'make test: ok')
         self.assertEqual(review_watch.verify_shipping(self.state,review.capture_repository)['status'],'verified')
         (root/'a.py').write_text('unreviewed\n')
         with self.assertRaisesRegex(ValueError,'worktree changed'):review_watch.verify_shipping(self.state,review.capture_repository)
