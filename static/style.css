@@ -100,7 +100,7 @@
 #submission li { border-top: 1px solid var(--border); padding: 9px 0; }
 .submission-name { overflow-wrap: anywhere; }
 .submission-stage { flex-shrink: 0; }
-#submission li[data-stage="opened"] .submission-stage { color: var(--green); }
+#submission li:is([data-stage="opened"], [data-stage="updated"], [data-stage="sent"]) .submission-stage { color: var(--green); }
 #submission[data-status="shipped"] progress { accent-color: var(--green); }
 #submission[data-status="blocked"] progress { accent-color: var(--red); }
 .submission-note, .submission-result { white-space: pre-wrap; overflow-wrap: anywhere; }

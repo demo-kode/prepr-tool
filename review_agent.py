@@ -242,7 +242,7 @@ def ship_prompt(cfg, spec, context, decision, pr, continued=False):
     return header(cfg, spec, context, continued=continued) + f'''
 ## Ship it requested
 The reviewer clicked Ship it (request {decision['id']}, snapshot {decision['snapshot_id']}, status {decision['status']}).
-That click approves exactly this: push each review branch and open one real pull request per affected repository, for the approved snapshot only.
+That click approves exactly this: push each review branch and open one real pull request per affected repository, or update the open pull request its review branch already has, for the approved snapshot only.
 It never approves merging, deploying, changing visibility, or shipping edits made after the click.
 
 PR platform access as recorded by the user: {access}
@@ -252,12 +252,15 @@ PR platform access as recorded by the user: {access}
 2. Decision already `shipped` or `blocked`: end, never rerun. `reconcile` true: an earlier attempt may have pushed or opened PRs. Inspect local commits, remote branches and existing PRs first; reuse matching PRs, never create duplicates.
 3. `{tool} ship-verify --state {state}` right after the claim: before any push and before tests, builds or anything else that can write files into the worktrees (new untracked files count as changes). It fails when a worktree differs from the approved snapshot: then record blocked with that reason and end.
 4. Ship from the review branches listed above. No new branches. Commit remaining in-scope uncommitted changes of the approved snapshot first, then push each branch as it is (squash only when the repository convention requires it).
-5. Follow each repository's PR instructions, templates and required checks. Checks must leave the worktrees as approved: remove files they generate. One PR per affected repository, from its review branch to its target branch. Put `PrePR request: {decision['id']}` in every PR description.
+5. Follow each repository's PR instructions, templates and required checks. Checks must leave the worktrees as approved: remove files they generate. One PR per affected repository, from its review branch to its target branch.
+   Before opening, look for an open PR from that review branch to its target. Found: the push updated it. Never open a second one; keep its reviewers, votes and description unless repository instructions say otherwise.
+   Put `PrePR request: {decision['id']}` in the description of every PR you open. Leave it out of PRs you only update.
    Report live status with `{tool} ship-progress --state {state} --repo NAME --stage STAGE` for each approved repo.
    Send checking when required checks start and checked when they pass, before pushing.
    Send pushing before its push and pushed after remote confirmation. Send creating before opening its PR and opened once the PR exists.
-   On retry, report the confirmed stage of existing branches and PRs.
-6. Record the verified result: `{tool} ship-result --state {state} --status shipped --body 'Repository: PR URL'` (one line per repository).
+   PR already existed: send updating instead of creating, and updated once the PR shows the pushed commit. The reviewer must see no new PR was opened.
+   On retry, report the confirmed stage of existing branches and PRs: opened for a PR carrying this request ID, updated for any other PR already open on the branch.
+6. Record the verified result: `{tool} ship-result --state {state} --status shipped --body 'Repository: PR URL'` (one line per repository; add ` (updated)` after the URL of a PR you updated).
 7. Anything that stops you (remote disagrees with the recorded platform, missing target, failed checks, missing credentials): `{tool} ship-result --state {state} --status blocked --body 'reason, plus PRs already created'`. You cannot ask anyone; a clear blocked reason is the answer.
 8. Never merge. Never deploy. Then end.
 '''

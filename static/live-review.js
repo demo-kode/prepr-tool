@@ -77,7 +77,7 @@
       const signature=JSON.stringify([result,feedback?.latestSnapshot,waiting]);if(holder.dataset.signature===signature)return;
       holder.dataset.signature=signature;holder.replaceChildren();
       if(result.decision){
-        const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:'Pull requests created · review closed',blocked:'Shipping blocked · review closed'};
+        const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:submission.outcome(state.review,d)+' · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
         if(d.action==='ship')holder.append(btn('Submission details',submission.show));
         if(d.result)holder.append(el('span','',d.result));

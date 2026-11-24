@@ -370,7 +370,7 @@ def main():
         p=sub.add_parser(command);p.add_argument('--state',required=True,type=Path)
         if command=='ship-progress':
             p.add_argument('--repo', required=True)
-            p.add_argument('--stage', required=True, choices=['checking','checked','pushing','pushed','creating','opened'])
+            p.add_argument('--stage', required=True, choices=['checking','checked','pushing','pushed','creating','opened','updating','updated'])
         if command=='ship-result':
             p.add_argument('--status',required=True,choices=['shipped','blocked']);p.add_argument('--body',required=True)
     sub.add_parser('list')

@@ -40,7 +40,7 @@ README has manifest fields and startup commands.
 - Then end turn. Never poll, never loop on `watch`, never fork yourself to watch. Host runner
   watches without a model. Reviewer comment or **Ship it** goes to one background CLI
   conversation per review, started with the context; it answers in threads, commits fix rounds,
-  republishes, opens PRs on Ship it.
+  republishes, opens or updates PRs on Ship it.
 - User returns to chat on same task: `python3 review.py agent-status REVIEW_ID` first. `run`
   present: background run is working in that checkout; wait. Read `git log` for fix-round commits
   and `feedback` before editing. After new edits: commit, republish.
@@ -135,9 +135,9 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 ## Ship it handoff
 
 - **Ship it** click requests real hosted PRs for exact displayed change set: push each review PR
-  branch, open PR from it to its target branch. Authorizes that scoped commit/push/PR creation
-  only; never merge, deployment or public visibility change. Honor remaining explicit user
-  restrictions. Never re-ask for approval the click gave; ask only for missing targets or real conflict.
+  branch, open PR from it to its target branch, or update the open PR that branch already has.
+  Authorizes that scoped commit/push/PR creation or update only; never merge, deployment or
+  public visibility change. Honor remaining explicit user restrictions. Never re-ask for approval the click gave; ask only for missing targets or real conflict.
 - `python3 review.py ship-claim --state ...`. Read `approvedSnapshotFile`: immutable snapshot,
   repo paths, branch/base, file scope, stable request ID. Keep for recovery.
 - Decision already `shipped` or `blocked`: report recorded result; never rerun. `reconcile` true:
@@ -154,14 +154,20 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 - Find each repo's remote and target branch from Git/task context. Keep unrelated edits. Run
   required checks. Create/update one real PR per affected repo from its PR branch. Ship no commits
   outside this change set. Follow repo PR instructions and templates.
-- Put `PrePR request: REQUEST_ID` in each PR description so interrupted attempts reconcile.
+- Branch already has an open PR to its target (user iterating on a sent PR): push updates it.
+  Never open a second PR. Keep its reviewers, votes and description unless repo instructions differ.
+- Put `PrePR request: REQUEST_ID` in description of each PR you open, so interrupted attempts
+  reconcile. Leave it out of PRs you only update: on retry, PR with this request ID was opened by
+  this request, any other open PR on the branch was updated.
   Return verified PR links; record with
   `python3 review.py ship-result --state ... --status shipped --body 'Repository: PR URL ...'`.
+  Add ` (updated)` after URL of an updated PR.
   Failure: `--status blocked` with reason and any PRs already created; report partial completion
   in chat. Neither result resumes comment watching. Retry of blocked work needs later user
   request; inspect existing remote work first.
 - Report branch and PR work with `review.py ship-progress --state ... --repo NAME --stage STAGE`.
   Send checking/checked around required checks, pushing/pushed around the push and creating/opened around PR submission.
+  Existing PR updated instead: send updating/updated, never creating/opened. Page then shows **PR updated**, not **PR opened**.
 - Runner starts ship run on click. Run cannot ask: missing target, wrong remote, failed check or
   changed worktree end as `blocked` with reason.
 - Ship run failed twice: page shows reason; **Start watching** retries. User asks in chat to finish

@@ -123,10 +123,11 @@ def decide(db, rid, data):
             if stage == 'verified' and repo is None:
                 progress['verified'] = True
             else:
-                stages = ('waiting', 'checking', 'checked', 'pushing', 'pushed', 'creating', 'opened')
-                if not isinstance(repo, str) or repo not in progress['repos'] or stage not in stages[1:]:
+                # New PR: creating/opened. Existing PR: updating/updated. Same rank: first report stays.
+                ranks = {'waiting':0, 'checking':1, 'checked':2, 'pushing':3, 'pushed':4, 'creating':5, 'updating':5, 'opened':6, 'updated':6}
+                if not isinstance(repo, str) or repo not in progress['repos'] or not isinstance(stage, str) or not ranks.get(stage):
                     raise ValueError('Expected an approved repository and a submission stage')
-                if stages.index(stage) > stages.index(progress['repos'][repo]):
+                if ranks[stage] > ranks[progress['repos'][repo]]:
                     progress['repos'][repo] = stage
             db.execute('UPDATE review_decisions SET progress=? WHERE review_id=?', (json.dumps(progress), rid))
             return decision(db, rid)

@@ -261,8 +261,27 @@ class WatchTests(unittest.TestCase):
             self.api('/api/reviews/demo/decision', {'action':'progress','token':'other','request':request['id'],'repo':'app','stage':'opened'})
         report('opened')
         self.assertEqual(self.api('/api/reviews/demo/watch')['decision']['progress']['repos']['app'], 'opened')
+        # Same rank: first confirmed kind stays.
+        self.assertEqual(report('updated')['progress']['repos']['app'], 'opened')
         review_watch.ship(review.api, self.state, 'complete', 'app: https://example.invalid/pr/1')
         with self.assertRaises(ValueError): report('opened')
+
+    def test_shipping_progress_tells_updated_pr_from_opened_pr(self):
+        other = {**self.payload['repos'][0], 'name':'worker', 'source':'/other'}
+        self.payload['repos'].append(other); self.sid = self.api('/api/reviews', self.payload)['snapshot']
+        self.start()
+        self.api('/api/reviews/demo/decision', {'action':'ship','snapshot':self.sid})
+        def report(stage, repo):
+            return review_watch.shipping_progress(review.api, self.state, stage, repo)['progress']['repos']
+        review_watch.ship(review.api, self.state, 'claim')
+        report('pushed', 'app'); report('pushed', 'worker')
+        self.assertEqual(report('updating', 'app'), {'app':'updating', 'worker':'pushed'})
+        # Kind fixed only by the confirmed stage: creating may still end as updated.
+        self.assertEqual(report('creating', 'app')['app'], 'updating')
+        report('creating', 'worker')
+        self.assertEqual(report('updated', 'worker'), {'app':'updating', 'worker':'updated'})
+        self.assertEqual(report('updated', 'app'), {'app':'updated', 'worker':'updated'})
+        self.assertEqual(report('opened', 'app')['app'], 'updated')
 
     def test_ship_request_survives_offline_and_claim_recovery(self):
         other={**self.payload['repos'][0],'name':'worker','source':'/other'}

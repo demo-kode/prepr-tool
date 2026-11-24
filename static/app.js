@@ -384,7 +384,7 @@ async function home(tab){
   for(const r of list){
     const item=el('div','review-item'),link=el('a','review-link');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));
     const meta=el('div','meta-line'),d=r.decision;meta.append(el('span','',r.id));
-    if(d){const [cls,text]={closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Creating PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
+    if(d){const [cls,text]={closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Submitting PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
     if(!completed(r))meta.append(el('span','',`${r.openThreads} open threads`));
     meta.append(el('span','',`Updated ${time(r.updated)}`));link.append(meta);item.append(link);
     if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!await ask(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`,'Delete'))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));

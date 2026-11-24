@@ -184,7 +184,7 @@ class AgentTests(unittest.TestCase):
         self.mode('ship'); self.run_job()
         call = self.calls()[0]
         self.assertEqual(call['argv'][1:7], ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']); self.assertIn('auto', call['argv'])
-        for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'ship-verify --state', 'Never merge. Never deploy.']:
+        for text in [f'PrePR request: {request}', 'github: gh CLI; target main', 'Target branch main.', 'ship-verify --state', 'Never merge. Never deploy.', 'send updating instead of creating']:
             self.assertIn(text, call['prompt'])
         decision = self.view()['decision']; self.assertEqual((decision['status'], decision['result']), ('shipped', 'app: https://example.invalid/pr/1'))
         self.assertEqual(decision['progress']['repos'], {'app':'opened'})

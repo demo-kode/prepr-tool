@@ -8,7 +8,10 @@ const submission = (() => {
   const result = panel.querySelector('.submission-result');
   const dismiss = panel.querySelector('button');
   const statuses = {waiting:'Waiting', checking:'Running checks', checked:'Checks passed', pushing:'Pushing branch', pushed:'Branch pushed',
-    creating:'Opening PR', opened:'PR opened'};
+    creating:'Opening PR', opened:'PR opened', updating:'Updating PR', updated:'PR updated', sent:'PR submitted'};
+  const done = ['opened','updated'];
+  // Shipped: settle each row. Kind never reported: neutral, no claim of a new PR.
+  const settled = stage => ['updating','updated'].includes(stage) ? 'updated' : ['creating','opened'].includes(stage) ? 'opened' : 'sent';
   let reviewId, dismissed, signature, pending = false;
 
   dismiss.onclick = () => panel.close();
@@ -29,7 +32,7 @@ const submission = (() => {
     panel.querySelector('.submission-review').textContent = review.title;
     const claimed = ['preparing','blocked'].includes(decision.status) || progress.verified;
     const complete = decision.status === 'shipped';
-    const confirmed = entries.filter(([,stage]) => stage === 'opened').length;
+    const confirmed = entries.filter(([,stage]) => done.includes(stage)).length;
     const messages = {sending:'Sending your request…', requested:'Waiting for the runner',
       preparing:progress.verified ? 'Snapshot verified' : 'Verifying the approved snapshot',
       shipped:'Submission complete', blocked:'Submission blocked', error:'Could not submit request'};
@@ -41,13 +44,12 @@ const submission = (() => {
     note.textContent = warning;
     bar.max = 3 + entries.length * 3;
     bar.value = complete ? bar.max : Number(!!claimed) + Number(!!progress.verified) +
-      entries.reduce((n,[,s]) => n + Number(!['waiting','checking'].includes(s)) + Number(['pushed','creating','opened'].includes(s)) + Number(s === 'opened'),0);
+      entries.reduce((n,[,s]) => n + Number(!['waiting','checking'].includes(s)) + Number(['pushed','creating','updating',...done].includes(s)) + Number(done.includes(s)),0);
     panel.dataset.status = decision.status;
-    const opened = complete ? entries.length : confirmed;
-    panel.querySelector('.submission-count').textContent = opened + ' / ' + entries.length + ' PRs';
+    panel.querySelector('.submission-count').textContent = (complete ? entries.length : confirmed) + ' / ' + entries.length + ' PRs';
     rows.replaceChildren(...entries.map(([name,stage]) => {
       const row = el('li');
-      row.dataset.stage = complete ? 'opened' : stage;
+      row.dataset.stage = complete ? settled(stage) : stage;
       row.append(el('span','submission-name',name),el('span','submission-stage',statuses[row.dataset.stage]));
       return row;
     }));
@@ -63,6 +65,14 @@ const submission = (() => {
         }
       }
     }
+  }
+
+  // Shipped status line: say whether PRs are new, updated or both.
+  function outcome(review, decision) {
+    const kinds = Object.values(decision.progress?.repos || {}).map(settled);
+    const noun = (kinds.length || review.repos.length) === 1 ? 'Pull request' : 'Pull requests';
+    if (!kinds.length || kinds.includes('sent')) return noun + ' submitted';
+    return noun + (!kinds.includes('updated') ? ' created' : !kinds.includes('opened') ? ' updated' : ' created and updated');
   }
 
   function update(review, watch) {
@@ -97,5 +107,5 @@ const submission = (() => {
       note.textContent = 'Live status unavailable. Reconnecting…';
     }
   }
-  return {request, update, show, offline};
+  return {request, update, show, offline, outcome};
 })();
