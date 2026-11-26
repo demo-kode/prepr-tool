@@ -122,7 +122,7 @@ No background agent also works: tell agent in chat to read feedback when done co
 | --- | --- |
 | File marks | `+` added · `*` changed · `+m`/`*m` moved · `+c`/`*c` copied (`*` = edited) · ~~struck~~ deleted |
 | Keys (file list) | ↑/↓ or W/S prev/next file · →/← or D/A viewed/unviewed |
-| Filters | **Hide unchanged moves**, **Hide tests** (both on by default) |
+| Filters | **Hide unchanged moves**, **Hide tests** (both on by default). Each review remembers its own **Hide tests** setting. |
 | Views | Split, Unified, Raw (full file). Drag dividers to resize. |
 | Tabs | **Files**, **Commits** (per repo, base to HEAD), **Discussion** (all threads) |
 | Snapshots | Selector at top. Comments stay on code they were written against. Viewed marks carry over for files unchanged since previous snapshot. |

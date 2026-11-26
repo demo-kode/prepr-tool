@@ -38,7 +38,17 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.locator('.file-nav[title="app/main.txt"]').click();await page.locator('.file-header .file-path',{hasText:/^main\.txt$/}).waitFor();await toggle.check();
  assert.equal(await page.locator('.file-nav[title="app/moved/same.txt"]').count(),0);
  const tests=page.getByLabel(/Hide tests \(1\)/);assert.equal(await tests.isChecked(),true);assert.equal(await page.locator('.file-nav[title="app/tests/test_main.py"]').count(),0);
- await tests.uncheck();await page.locator('.file-nav[title="app/tests/test_main.py"]').waitFor();assert.equal(await page.locator('.file-nav[title="app/tests/test_main.py"] .file-status').textContent(),'+');await tests.check();
+ await tests.uncheck();await page.locator('.file-nav[title="app/tests/test_main.py"]').waitFor();assert.equal(await page.locator('.file-nav[title="app/tests/test_main.py"] .file-status').textContent(),'+');
+ // Showing tests in one review must not change the default in another.
+ const otherReview=id+'-other';
+ await call('/api/reviews',{...payload,id:otherReview});
+ await page.evaluate(()=>localStorage.setItem('prepr-hide-tests','0')); // Older versions saved one global choice.
+ await page.goto(url+'/?review='+otherReview);
+ assert.equal(await tests.isChecked(),true,'new review starts with tests hidden');
+ assert.equal(await page.locator('.file-nav[title="app/tests/test_main.py"]').count(),0);
+ await page.goto(url+'/?review='+id+'&repo=app&file=main.txt');
+ assert.equal(await tests.isChecked(),false,'original review remembers its choice');
+ await tests.check();
  // Arrow keys walk visible files.
  await page.locator('.file-nav[title="app/main.txt"]').click();await page.keyboard.press('ArrowDown');
  await page.locator('.file-header .file-path',{hasText:/^gone\.txt$/}).waitFor();assert.equal(await page.evaluate(()=>document.activeElement.title),'app/gone.txt');

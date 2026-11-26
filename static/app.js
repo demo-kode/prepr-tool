@@ -3,7 +3,7 @@ const app = document.querySelector('#app');
 // Reviewer name: asked where a comment is written, not in the top bar.
 const author = () => localStorage.getItem('prepr-author') || 'Reviewer';
 const decisionTokens = {closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Submitting PRs']};
-const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: localStorage.getItem('prepr-hide-tests')!=='0', sidebarScroll: null, watcher: null, expanded: new Set(), file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
+const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: true, sidebarScroll: null, watcher: null, expanded: new Set(), file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
 function btn(text, action, cls='') { const n=el('button',cls,text); n.type='button'; if(cls.split(' ').includes('review-edit'))n.disabled=!!state.review?.decision; n.addEventListener('click', () => Promise.resolve(action()).catch(error => toast(error.message))); return n; }
 function iconBtn(label,icon,action,cls='') {
@@ -39,6 +39,7 @@ if(embedded)document.addEventListener('click',e=>{const a=e.target.closest?.('a[
 async function api(path, data, method='POST') { const response=await fetch(path, data===undefined ? {} : {method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const result=await response.json(); if(!response.ok) throw Error(result.error || 'Request failed'); return result; }
 // Earlier threads stay visible on later snapshots unless file deleted.
 function fileThreads(repo,path,status) { return state.review.threads.filter(t=>t.repo===repo&&t.path===path&&(t.snapshot_id===state.review.snapshot||(t.snapshot_id<state.review.snapshot&&status!=='D'))); }
+function hideTestsKey(reviewId) { return `prepr-hide-tests:${reviewId}`; }
 function snapshotNumber(id) { const i=state.review.snapshots.findIndex(s=>s.id===id);return state.review.snapshots.length-i; }
 function splitLines(text) {
   // Match Python splitlines, used by persisted comment anchors.
@@ -80,6 +81,7 @@ async function openReview(id, snapshot, selection, stillFollowing) {
   try {
     const review = await request;
     if (pendingReview !== request || (stillFollowing && !stillFollowing())) return;
+    state.hideTests = localStorage.getItem(hideTestsKey(review.id)) !== '0';
     state.review = review;
   } finally {
     if (pendingReview === request) pendingReview = null;
@@ -154,7 +156,7 @@ function renderSidebar() {
   };
   tools.append(search);
   filter('hideNoDiff','prepr-hide-nodiff','Hide unchanged moves','Hide moved or copied files without content changes',all.filter(noDiff).length);
-  filter('hideTests','prepr-hide-tests','Hide tests','Hide test files and fixtures',all.filter(f=>isTest(f.path)).length);
+  filter('hideTests',hideTestsKey(state.review.id),'Hide tests','Hide test files and fixtures',all.filter(f=>isTest(f.path)).length);
   side.append(tools);
   const list=el('div','file-tree');side.append(list);
   const paint=()=>{list.replaceChildren();const query=state.query.toLowerCase();
