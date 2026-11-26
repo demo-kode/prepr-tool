@@ -105,7 +105,7 @@ class WatchTests(unittest.TestCase):
         t=self.api('/api/reviews/demo/resume')
         self.assertEqual((t['agent'],t['session'],t['cwd'],t['roots'],t['active']),('codex','0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee',os.getcwd(),['/demo',str(Path(self.state).resolve().parent)],True))
         self.api('/api/reviews/demo/watch',{'action':'stop'})
-        with mock.patch.dict(os.environ,{'CODEX_THREAD_ID':'','CLAUDE_CODE_SESSION_ID':'7c75ba72-19b6-4e13-a423-e504f6d4798b'}):
+        with mock.patch.dict(os.environ,{'CODEX_THREAD_ID':'','CLAUDE_CODE_SESSION_ID':'0199bbbb-cccc-dddd-eeee-ffffffffffff'}):
             review_watch.start(review.api,self.url,'demo',self.state,'Claude Code')
         self.assertEqual(self.api('/api/reviews/demo/resume')['agent'],'claude')
         self.api('/api/reviews/demo/watch',{'action':'stop'})
