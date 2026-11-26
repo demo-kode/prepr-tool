@@ -2,18 +2,12 @@
   <title id="title">PrePR</title>
   <desc id="desc">Catch the little things. Before the pull request.</desc>
   <rect width="1280" height="360" rx="20" fill="#111318"/>
-  <path d="M0 340H1280" stroke="#a994ff" stroke-width="4"/>
+  <path d="M0 340H1280" stroke="#aaa0ff" stroke-width="4"/>
   <g font-family="Arial, Helvetica, sans-serif">
-    <text x="64" y="72" fill="#a994ff" font-size="16" letter-spacing="4">LOCAL CODE REVIEW / HUMAN + AGENT</text>
-    <text x="60" y="190" fill="#f3f1fa" font-size="108" font-weight="700" letter-spacing="-6">PrePR<tspan fill="#a994ff">.</tspan></text>
+    <text x="64" y="72" fill="#aaa0ff" font-size="16" letter-spacing="4">LOCAL CODE REVIEW / HUMAN + AGENT</text>
+    <text x="60" y="190" fill="#f3f1fa" font-size="108" font-weight="700" letter-spacing="-6">PrePR<tspan fill="#aaa0ff">.</tspan></text>
     <text x="64" y="252" fill="#d6d2e0" font-size="27">Catch the little things.</text>
     <text x="64" y="292" fill="#9693a5" font-size="27">Before the pull request.</text>
   </g>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M960 101V251M960 206C960 153 1110 213 1110 145V103" stroke="#6c608e" stroke-width="12"/>
-    <circle cx="960" cy="101" r="23" fill="#111318" stroke="#a994ff" stroke-width="8"/>
-    <circle cx="960" cy="251" r="23" fill="#111318" stroke="#a994ff" stroke-width="8"/>
-    <circle cx="1110" cy="101" r="34" fill="#a994ff" stroke="#a994ff" stroke-width="8"/>
-    <path d="M1095 101L1105 111L1124 91" stroke="#111318" stroke-width="7"/>
-  </g>
+  <g transform="translate(960 96) scale(7)"><rect width="24" height="24" rx="6" fill="#aaa0ff"/><path d="M8.7 7.3v9.4M8.7 12.9c2.8 0 5.6-.5 5.6-3.7M12.5 15.7l1.7 1.5 3-3.3" fill="none" stroke="#14121f" stroke-width="2.05" stroke-linecap="round" stroke-linejoin="round"/></g>
 </svg>
