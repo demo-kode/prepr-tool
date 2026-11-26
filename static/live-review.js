@@ -80,7 +80,7 @@
         const d=result.decision,labels={closed:'Review closed · local work untouched',requested:'Ship it requested · waiting for the working agent',preparing:'Working agent preparing pull requests',shipped:submission.outcome(state.review,d)+' · review closed',blocked:'Shipping blocked · review closed'};
         holder.append(el('span','',labels[d.status]));
         if(d.action==='ship')holder.append(btn('Submission details',submission.show));
-        if(d.result)holder.append(el('span','',d.result));
+        if(d.result){const lines=el('div','ship-result');lines.append(...submission.links(d.result));holder.append(lines);}
         if(canStart&&['requested','preparing'].includes(d.status)){if(w0?.error)holder.append(el('span','agent-away',w0.error));holder.append(...startNotes(w0?.author,result.start));}
         return;
       }

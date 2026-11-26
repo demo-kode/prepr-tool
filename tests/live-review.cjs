@@ -116,11 +116,18 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await overlay.getByText('PR opened',{exact:true}).waitFor();
  await progress('worker','updating');await overlay.getByText('Updating PR',{exact:true}).waitFor();
  await progress('worker','updated');await overlay.getByText('2 / 2 PRs').waitFor();
- await post('/api/reviews/'+shipId+'/decision',{action:'complete',token,request:handoff.decision.id,result:'app: https://example.invalid/pr/1'});
+ await post('/api/reviews/'+shipId+'/decision',{action:'complete',token,request:handoff.decision.id,result:'app: https://example.invalid/pr/1, worker: https://example.invalid/pr/2 (updated)'});
  await page.getByText('Pull requests created and updated · review closed',{exact:true}).waitFor();
  await overlay.getByText('Submission complete').waitFor();
  assert.deepEqual(await overlay.locator('.submission-stage').allTextContents(),['PR opened','PR updated']);
- assert.equal(await overlay.getByRole('link').getAttribute('href'),'https://example.invalid/pr/1');
+ // PR links: one per line to copy, also when the agent joined them on one line.
+ const lines='app: https://example.invalid/pr/1\nworker: https://example.invalid/pr/2 (updated)',hrefs=['https://example.invalid/pr/1','https://example.invalid/pr/2'];
+ for(const box of [overlay.locator('.submission-result'),page.locator('.live-review-status .ship-result')]){
+  assert.equal(await box.evaluate(n=>n.innerText),lines);
+  assert.deepEqual(await box.getByRole('link').evaluateAll(a=>a.map(x=>x.href)),hrefs);
+ }
+ assert.equal(await page.locator('.ship-result').evaluate(n=>n.getBoundingClientRect().top>=n.previousElementSibling.getBoundingClientRect().bottom),true,'links below the status line');
+ await page.screenshot({path:'.local/ui-test/ship-result.png'});
  assert.equal(await overlay.getByRole('progressbar').evaluate(n=>n.value===n.max),true);
  await overlay.getByRole('button',{name:'Done'}).click();
  await page.goto(url+'/?tab=completed');await page.locator('.review-item',{has:page.getByText(shipId,{exact:true})}).locator('.status-token.shipped',{hasText:'PR submitted'}).waitFor();

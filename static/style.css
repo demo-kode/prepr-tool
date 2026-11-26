@@ -25,7 +25,7 @@
 @media(max-width:620px){.workspace{display:block}.sidebar-divider{display:none}.diff.single{min-width:0}.file-actions{flex-wrap:wrap;gap:8px}.file-header{gap:8px}.diff.split{min-width:0}.diff-divider{display:none}.diff .line-number{flex-basis:36px}}
 
 .diff.split .thread-row td{position:relative;z-index:3}
-.live-review-status:empty{display:none}.live-review-status{display:flex;align-items:center;gap:12px;margin:12px 0;font-size:12px;color:var(--muted)}.live-review-status button{padding:3px 8px;font-size:11px}
+.live-review-status:empty{display:none}.live-review-status{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:12px 0;font-size:12px;color:var(--muted)}.live-review-status button{padding:3px 8px;font-size:11px}
 
 .icon-button{display:inline-flex;align-items:center;justify-content:center;padding:7px}.icon-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.message-head .delete-comment{margin-left:auto;padding:4px;color:var(--muted)}.delete-comment:hover{color:var(--red)}
 
@@ -103,7 +103,9 @@
 #submission li:is([data-stage="opened"], [data-stage="updated"], [data-stage="sent"]) .submission-stage { color: var(--green); }
 #submission[data-status="shipped"] progress { accent-color: var(--green); }
 #submission[data-status="blocked"] progress { accent-color: var(--red); }
-.submission-note, .submission-result { white-space: pre-wrap; overflow-wrap: anywhere; }
+.submission-note, .submission-result, .ship-result { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Status line: recorded result on its own rows, one PR per line. */
+.ship-result { flex-basis: 100%; }
 .submission-note { color: var(--muted); }
 #submission[data-status="blocked"] .submission-summary, #submission[data-status="error"] .submission-summary { color: var(--red); }
 .submission-result { font-size: 13px; }

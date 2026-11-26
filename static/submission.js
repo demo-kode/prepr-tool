@@ -54,17 +54,18 @@ const submission = (() => {
       return row;
     }));
     dismiss.textContent = terminal || decision.status === 'error' ? 'Done' : 'Hide progress';
-    result.replaceChildren();
-    if (decision.result) {
-      for (const part of decision.result.split(/(https?:\/\/[^\s<>]+)/g)) {
-        if (!/^https?:\/\//.test(part)) result.append(document.createTextNode(part));
-        else {
-          const link = el('a','',part);
-          link.href = part; link.target = '_blank'; link.rel = 'noopener noreferrer';
-          result.append(link);
-        }
-      }
-    }
+    result.replaceChildren(...links(decision.result));
+  }
+
+  // Recorded result as text and links. One PR per line: several links on one line get a line each, ready to copy.
+  function links(text) {
+    const lines = (text || '').split('\n').flatMap(line => (line.match(/https?:\/\//g) || []).length > 1 ? line.split(/[,;]?\s+(?=[^\s:]+: https?:\/\/)/) : [line]);
+    return lines.join('\n').split(/(https?:\/\/[^\s<>]+)/g).filter(Boolean).map(part => {
+      if (!/^https?:\/\//.test(part)) return document.createTextNode(part);
+      const link = el('a','',part);
+      link.href = part; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      return link;
+    });
   }
 
   // Shipped status line: say whether PRs are new, updated or both.
@@ -107,5 +108,5 @@ const submission = (() => {
       note.textContent = 'Live status unavailable. Reconnecting…';
     }
   }
-  return {request, update, show, offline, outcome};
+  return {request, update, show, offline, outcome, links};
 })();

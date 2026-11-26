@@ -175,9 +175,9 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
 - Put `PrePR request: REQUEST_ID` in description of each PR you open, so interrupted attempts
   reconcile. Leave it out of PRs you only update: on retry, PR with this request ID was opened by
   this request, any other open PR on the branch was updated.
-  Return verified PR links; record with
-  `python3 review.py ship-result --state ... --status shipped --body 'Repository: PR URL ...'`.
-  Add ` (updated)` after URL of an updated PR.
+  Record verified PR links right after PRs verified, before ledgers and other bookkeeping:
+  `python3 review.py ship-result --state ... --status shipped --body 'Repository: PR URL'`,
+  one line per repo, real newline between. Add ` (updated)` after URL of an updated PR.
   Failure: `--status blocked` with reason and any PRs already created; report partial completion
   in chat. Neither result resumes comment watching. Retry of blocked work needs later user
   request; inspect existing remote work first.
@@ -201,6 +201,7 @@ Keep PrePR in step with what happened. Review must not stay **Active** once its 
   Then, after PRs verified:
   `python3 review.py mark-sent REVIEW_ID --body 'repo: PR URL'` (one line per repo). Review moves
   to **Completed**, green **PR submitted**. Works on a closed review too.
+- PR links in chat: one per line, plain `repo: URL`, nothing else on the line. User copies them.
 - Ship it already requested for that review: use **Ship it handoff** flow (`ship-result`), not
   `mark-sent`.
 - User drops or finishes task in chat without PR (abandon, keep local, done): `python3 review.py

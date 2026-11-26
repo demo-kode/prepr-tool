@@ -284,7 +284,8 @@ PR platform access as recorded by the user: {access}
    Send pushing before its push and pushed after remote confirmation. Send creating before opening its PR and opened once the PR exists.
    PR already existed: send updating instead of creating, and updated once the PR shows the pushed commit. The reviewer must see no new PR was opened.
    On retry, report the confirmed stage of existing branches and PRs: opened for a PR carrying this request ID, updated for any other PR already open on the branch.
-5. Record the verified result: `{tool} ship-result --state {state} --status shipped --body 'Repository: PR URL'` (one line per repository; add ` (updated)` after the URL of a PR you updated).
+5. Record the verified result: `{tool} ship-result --state {state} --status shipped --body 'Repository: PR URL'` (one line per repository, a real newline between them: the reviewer copies these links; add ` (updated)` after the URL of a PR you updated).
+   Record it as soon as every PR is verified: the reviewer waits on it. Ledgers, work logs and other bookkeeping the instructions ask for come after it, before you end.
 6. Anything that stops you (remote disagrees with the recorded platform, missing target, failed checks, missing credentials): `{tool} ship-result --state {state} --status blocked --body 'reason, plus PRs already created'`. You cannot ask anyone; a clear blocked reason is the answer.
 7. Never merge. Never deploy. Then end.
 """
