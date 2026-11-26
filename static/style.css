@@ -111,6 +111,11 @@
 .submission-result { font-size: 13px; }
 .submission-result:empty, .submission-note:empty { display: none; }
 #submission footer { display: flex; justify-content: flex-end; margin-top: 20px; }
+/* Top bar stays in view with its way back to the review list: any tab, any scroll position, error pages. */
+.topbar { position: sticky; top: 0; z-index: 6; background: var(--bg); }
+.top-left { display: flex; align-items: center; gap: 18px; min-width: 0; }
+.all-reviews { font-size: 13px; font-weight: 600; white-space: nowrap; }
+@media (max-width: 620px) { .file-header { top: 60px; } }
 /* Checks recorded at publish. */
 .checks { margin-top: 8px; color: var(--muted); font-size: 12px; }
 .checks summary { cursor: pointer; }

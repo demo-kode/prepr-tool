@@ -76,6 +76,12 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.getByRole('button',{name:/gone\.txt/}).click();await page.getByText('You’re viewing an earlier snapshot.',{exact:false}).waitFor();
  await page.locator('[data-thread="'+deleted+'"]').waitFor();
  assert.equal(await page.locator('.topbar .brand').getAttribute('href'),'https://github.com/demo-kode/prepr-tool');assert.equal(await page.locator('.topbar .brand').getAttribute('target'),'_blank');
+ // Way back to the review list: top bar link, in view after scrolling too.
+ const back=page.locator('.topbar .all-reviews');assert.equal(await back.getAttribute('href'),'/');
+ await page.setViewportSize({width:1400,height:420});await page.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));
+ assert.equal(await page.evaluate(()=>scrollY>0),true,'page scrolled');assert.equal(await back.evaluate(n=>{const r=n.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true,'link in view after scroll');
+ await page.screenshot({path:'.local/ui-test/reviews-link-scrolled.png'});
+ await page.evaluate(()=>window.scrollTo(0,0));await page.setViewportSize({width:1400,height:800});
  // Commits tab replaces branch bar.
  assert.equal(await page.locator('.branch-line').count(),0);
  await page.getByRole('button',{name:/^Commits/}).click();await page.locator('.commit-repo-head',{hasText:'main · aaaaaaaa → bbbbbbbb'}).waitFor();
@@ -88,5 +94,9 @@ const call=async(path,data,method='POST')=>{const r=await fetch(url+path,{method
  await page.screenshot({path:'.local/ui-test/commits.png'});
  await page.locator('.commit-file',{hasText:'main.txt'}).click();await page.locator('.file-header .file-path',{hasText:/^main\.txt$/}).waitFor();
  await page.screenshot({path:'.local/ui-test/sidebar.png'});
- assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, collapsed resolved, commits tab, inline origin, brand link, deleted-file discussion.');
+ // Review that fails to load: link still there and leads to the list. Narrow screen keeps it.
+ await page.goto(url+'/?review=no-such-review');await page.locator('.error').waitFor();
+ await page.setViewportSize({width:420,height:900});assert.equal(await back.isVisible(),true,'narrow screen keeps link');await page.screenshot({path:'.local/ui-test/reviews-link-narrow.png'});await page.setViewportSize({width:1400,height:800});
+ await back.click();await page.getByRole('heading',{name:'Reviews before pull requests'}).waitFor();assert.equal(await back.isVisible(),true);
+ assert.deepEqual(errors,[]);console.log('PASS: compact sidebar, folder grouping, status marks, arrow keys, viewed keys, WASD, no-diff/tests toggles, stable scroll, carried threads, collapsed resolved, commits tab, inline origin, brand link, All reviews link (scrolled, failed load, narrow), deleted-file discussion.');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
