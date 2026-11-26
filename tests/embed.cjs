@@ -37,7 +37,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await f.getByRole('button',{name:/^Discussion/}).click();await f.getByRole('heading',{name:'Review discussion'}).waitFor();
  // Agent away + comment waiting: banner offers Start watching.
  await post('/api/reviews/'+id+'/watch',{action:'start',token:'b'.repeat(32),author:'Codex',agent:'codex',session:'0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee',cwd:'/tmp',roots:['/tmp']});
- await f.getByText('Codex · watching',{exact:true}).waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
+ await f.locator('#watcher-indicator.watching[title="Codex is watching this review"]').waitFor();assert.equal(await f.getByRole('button',{name:'Start watching'}).count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'stop'});
  const snap=(await (await fetch(url+'/api/reviews/'+id)).json()).snapshot;
  await post('/api/threads',{snapshot:snap,repo:'app',path:'demo.py',side:'new',line:1,author:'Reviewer',body:'Still there?'});

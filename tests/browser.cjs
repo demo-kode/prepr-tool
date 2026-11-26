@@ -29,7 +29,7 @@ fs.mkdirSync(artifactDir,{recursive:true});
  await page.getByRole('checkbox',{name:'Viewed',exact:true}).check();await page.getByText('1 / 3 files viewed',{exact:true}).waitFor();
  await page.screenshot({path:path.join(artifactDir,'desktop.png'),fullPage:true});
  await page.getByRole('button',{name:'Resolve',exact:true}).click();await page.getByText('Resolved',{exact:true}).waitFor();
- await page.getByRole('button',{name:'Reopen',exact:true}).click();await page.getByText('Open thread',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Reopen',exact:true}).click();await page.getByRole('button',{name:'Resolve',exact:true}).waitFor();
  await page.getByRole('button',{name:/^Discussion/}).click();await page.getByRole('heading',{name:'Review discussion'}).waitFor();
  assert.equal(await page.locator('.thread').count(),1);
  const payload=structuredClone(fixture);payload.repos[0].files[0].new='// new line\nlocals {\n  timeout = 180\n  mode = "thorough"\n}\n';

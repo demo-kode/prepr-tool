@@ -47,10 +47,7 @@
       const shipping=result.decision?.status==='preparing'&&!result.watcher?.error;
       indicator(watching||shipping,shipping?'Submitting PRs':busy?'Agent working':watching?'Agent watching':'Not watching',busy?`${w.author} is ${doing}`:watching?`${w.author} is watching this review`:shipping?'Working agent is submitting pull requests':'No agent is watching this review',busy||shipping,action,rid);
       state.watcher=w;paintActivity();
-      state.review.decision=result.decision;
-      for(const button of document.querySelectorAll('.review-ship'))button.disabled=!!result.decision;
-      for(const button of document.querySelectorAll('.review-close'))button.disabled=!!result.decision;
-      for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!result.decision;
+      state.review.decision=result.decision;paintDecision(result.decision);
       const editable = () => state.draft || document.querySelector('.composer, dialog[open]') ||
         document.activeElement?.matches('input,select,textarea');
       const current = state.review;
@@ -86,9 +83,8 @@
       }
       if(result.latestSnapshot>state.review.snapshot)holder.append(btn('Open updated diff',()=>{if(canNavigate())return openReview(rid);}));
       if(!result.watcher){holder.append(...startNotes('',result.start));return;}
-      if(result.watcher.active){
-        holder.append(el('span','',`${result.watcher.author} · ${result.watcher.activity==='idle'?'watching':result.watcher.activity==='code'?'changing code':'writing replies'}`));
-      }else{
+      // Attached agent: the top bar indicator says it, once.
+      if(!result.watcher.active){
         // Runner gave up: its reason replaces the plain idle note.
         holder.append(el('span',waiting||w0.error?'agent-away':'',w0.error||(waiting?`${w0.author} isn't watching · ${waiting} comment${waiting===1?'':'s'} waiting`:`${w0.author} isn't watching`)),...startNotes(w0.author,result.start));
       }

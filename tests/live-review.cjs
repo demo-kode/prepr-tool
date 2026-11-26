@@ -26,16 +26,18 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  assert.equal(await top.getByRole('button',{name:'Start watching',exact:true}).isEnabled(),true);assert.equal(new URL(page.url()).searchParams.get('review'),id);
  assert.equal(await page.locator('.live-review-status button').count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'start',token,author:'Codex',session:'fixture-session'});
- await page.getByText('Codex · watching',{exact:true}).waitFor();assert.equal(await top.locator('button').count(),0,'watching: no button');
+ await page.locator('#watcher-indicator.watching[title="Codex is watching this review"]').waitFor();assert.equal(await top.locator('button').count(),0,'watching: no button');
  // Runner gave up: reason on page, retry offered; next start clears it.
  await post('/api/reviews/'+id+'/watch',{action:'fail',token,error:'Codex run failed: codex exited with code 1 · log /tmp/x.log'});
  await page.getByText('Codex run failed: codex exited with code 1 · log /tmp/x.log',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Start watching',exact:true}).isEnabled(),true);assert.equal(await page.locator('#watcher-indicator.watching').count(),0);
  await post('/api/reviews/'+id+'/watch',{action:'start',token,author:'Codex',session:'fixture-session'});
- await page.getByText('Codex · watching',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Start watching',exact:true}).count(),0);
+ await page.locator('#watcher-indicator.watching[title="Codex is watching this review"]').waitFor();assert.equal(await page.getByRole('button',{name:'Start watching',exact:true}).count(),0);
  await page.locator('#watcher-indicator.watching').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent watching');
  await page.getByRole('button',{name:'Comment on after line 1',exact:true}).click();
  await page.getByRole('textbox',{name:'Comment on after line 1'}).fill('Why this change?');
+ // Reviewer name is asked where the comment is written.
+ assert.equal(await page.getByRole('textbox',{name:'Comment author'}).inputValue(),'Reviewer');assert.equal(await page.locator('.topbar input').count(),0);await page.screenshot({path:'.local/ui-test/composer.png'});
  await page.getByRole('button',{name:'Post comment',exact:true}).click();await page.getByText('Why this change?',{exact:true}).waitFor();
  await page.waitForFunction(()=>document.querySelector('.thread .thread-activity')?.textContent==='Waiting for Codex');
  const feedback=await(await fetch(url+'/api/reviews/'+id+'/feedback')).json(),tid=feedback.threads[0].id;
@@ -48,7 +50,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  await page.waitForFunction(id=>document.querySelector(`[data-thread="${id}"] .thread-activity`)?.textContent==='Codex is writing a reply…',tid);
  await post('/api/reviews/'+id+'/watch',{action:'activity',token,activity:'code',threads:[tid]});
  await page.waitForFunction(id=>document.querySelector(`[data-thread="${id}"] .thread-activity`)?.textContent==='Codex is changing code…',tid);
- await page.getByText('Codex · changing code',{exact:true}).waitFor();await page.screenshot({path:'.local/ui-test/agent-working.png'});
+ await page.locator('#watcher-indicator.working[title="Codex is changing code for 1 thread"]').waitFor();await page.screenshot({path:'.local/ui-test/agent-working.png'});
  await post('/api/reviews/'+id+'/watch',{action:'activity',token,activity:'idle'});
  await page.locator('#watcher-indicator.watching').waitFor();assert.equal(await page.locator('.watcher-label').textContent(),'Agent watching');
  assert.equal(await badge.textContent(),'Waiting for your reply');
@@ -83,7 +85,9 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  assert.equal((await post('/api/reviews/'+id+'/watch',{action:'heartbeat',token})).status,'closed');
  const closed=page.locator('.review-item',{has:page.getByText(id,{exact:true})});await closed.locator('.status-token.closed',{hasText:'Closed'}).waitFor();
  await page.goto(url+'/?review='+id);await page.getByText('Review closed · local work untouched',{exact:true}).waitFor();
- for(const name of ['Close','Ship it','Comment on file'])assert.equal(await page.getByRole('button',{name,exact:true}).isDisabled(),true,name);
+ // Decided review: state chip replaces Close and Ship it; comment controls locked.
+ for(const name of ['Close','Ship it'])assert.equal(await page.getByRole('button',{name,exact:true}).count(),0,name);
+ assert.equal(await page.locator('#review-tools .decision-chip.closed').textContent(),'Closed');assert.equal(await page.getByRole('button',{name:'Comment on file',exact:true}).isDisabled(),true);
  await page.goto(url+'/');assert.equal(await page.locator('.review-item',{has:page.getByText(id,{exact:true})}).count(),0);
  await page.getByRole('button',{name:/^Completed/}).click();
  await closed.getByRole('button',{name:'Delete review'}).click();await page.getByRole('dialog').getByRole('button',{name:'Cancel'}).click();assert.equal(await closed.count(),1);
@@ -92,7 +96,7 @@ const post=async(path,data)=>{const r=await fetch(url+path,{method:'POST',header
  const shipId=id+'-ship';payload.id=shipId;payload.repos.push({...payload.repos[0],name:'worker'});payload.checks='npm test: 150 passed\nterraform test: ok';await post('/api/reviews',payload);
  await page.goto(url+'/?review='+shipId);
  // Checks recorded at publish: shown to the reviewer before Ship it reuses them.
- assert.equal(await page.locator('.checks summary').textContent(),'2 checks recorded as passed on this snapshot · Ship it reuses them');
+ assert.equal(await page.locator('.checks summary').textContent(),'2 checks passed');assert.equal(await page.locator('.checks summary').getAttribute('title'),'Recorded as passed on this snapshot · Ship it reuses them');
  await page.locator('.checks summary').click();assert.equal(await page.locator('.checks pre').textContent(),payload.checks);delete payload.checks;
  await page.getByRole('button',{name:'Ship it',exact:true}).click();
  await page.getByText('Ship it requested · waiting for the working agent',{exact:true}).waitFor();

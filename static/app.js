@@ -1,8 +1,8 @@
 'use strict';
 const app = document.querySelector('#app');
-const authorInput = document.querySelector('#author');
-authorInput.value = localStorage.getItem('prepr-author') || 'Reviewer';
-authorInput.addEventListener('change', () => localStorage.setItem('prepr-author', authorInput.value.trim() || 'Reviewer'));
+// Reviewer name: asked where a comment is written, not in the top bar.
+const author = () => localStorage.getItem('prepr-author') || 'Reviewer';
+const decisionTokens = {closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Submitting PRs']};
 const state = { review: null, selected: null, tab: 'files', query: '', threadFilter: 'all', hideNoDiff: localStorage.getItem('prepr-hide-nodiff')!=='0', hideTests: localStorage.getItem('prepr-hide-tests')!=='0', sidebarScroll: null, watcher: null, expanded: new Set(), file: null, request: 0, draft: false, view: ['split','unified','raw'].includes(localStorage.getItem('prepr-view')) ? localStorage.getItem('prepr-view') : 'split' };
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
 function btn(text, action, cls='') { const n=el('button',cls,text); n.type='button'; if(cls.split(' ').includes('review-edit'))n.disabled=!!state.review?.decision; n.addEventListener('click', () => Promise.resolve(action()).catch(error => toast(error.message))); return n; }
@@ -94,35 +94,54 @@ async function openReview(id, snapshot, selection, stillFollowing) {
   if(state.tab==='files') await loadFile(); else renderOther();
 }
 async function refresh() { if(!canNavigate())return; await openReview(state.review.id,state.review.snapshot); toast('Comments refreshed'); }
-function renderShell() {
-  const r=state.review; app.replaceChildren();
-  const header=el('section','review-header');
-  const crumb=el('div','eyebrow'); const link=el('a','','Reviews');link.href='/';crumb.append(link,document.createTextNode(` / ${r.id}`));header.append(crumb);
-  const title=el('div','title-line');title.append(el('h1','',r.title));
-  const tools=el('div','title-tools');const versions=el('select');versions.setAttribute('aria-label','Review snapshot');
+// Top bar: where you are, plus the open review's own controls. Emptied on the list page.
+function paintBar(r) {
+  const crumb=document.querySelector('.crumb-review'),tools=document.querySelector('#review-tools'),back=document.querySelector('.all-reviews');
+  crumb.replaceChildren();tools.replaceChildren();
+  // Agent state belongs to a review: nothing to show on the list.
+  document.querySelector('#watcher-indicator').hidden=!r;
+  if(!r){back.setAttribute('aria-current','page');return;}
+  back.removeAttribute('aria-current');
+  const title=el('h1','',r.title);title.title=r.title;crumb.append(el('span','crumb-sep','/'),title,el('span','crumb-id',r.id));
+  const versions=el('select');versions.setAttribute('aria-label','Review snapshot');
   r.snapshots.forEach((v,i)=>{const o=el('option','',`Snapshot ${r.snapshots.length-i}${i===0?' · latest':''} — ${time(v.created)}`);o.value=v.id;versions.append(o);});versions.value=r.snapshot;
   versions.addEventListener('change',()=>{if(!canNavigate()){versions.value=r.snapshot;return;}openReview(r.id,Number(versions.value)).catch(e=>toast(e.message));});
-  tools.append(versions,iconBtn('Refresh','refresh',refresh),btn('Close',()=>PreprLive.decide('close'),'review-close'),btn('Ship it',()=>PreprLive.decide('ship'),'primary review-ship'));title.append(tools);header.append(title);
-  header.append(el('div','live-review-status'));
-  if(globalThis.PreprLive)PreprLive.refresh();
-  if(r.description)header.append(el('p','description',r.description));
-  // Checks recorded as passed on this snapshot: Ship it reuses them.
-  if(r.checks){const n=r.checks.split('\n').length,checks=el('details','checks');checks.append(el('summary','',`${n} check${n===1?'':'s'} recorded as passed on this snapshot · Ship it reuses them`),el('pre','',r.checks));header.append(checks);}
-  const stats=el('div','meta-line');const add=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.added,0),0), del=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.removed,0),0);
-  stats.append(el('span','pill purple','Local review'),el('span','',`${r.repos.length} repositories`),el('span','',`${totalFiles()} changed files`),el('span','plus',`+${add.toLocaleString()}`),el('span','minus',`−${del.toLocaleString()}`));header.append(stats);
-  const tabs=el('nav','tabs');const open=r.threads.length;
+  tools.append(versions,iconBtn('Refresh','refresh',refresh,'quiet'),btn('Close',()=>PreprLive.decide('close'),'review-close quiet'),btn('Ship it',()=>PreprLive.decide('ship'),'primary review-ship'),el('span','status-token decision-chip'));
+  paintDecision(r.decision);
+}
+// Decided review: its state replaces Close and Ship it. No dead buttons.
+function paintDecision(d) {
+  for(const button of document.querySelectorAll('.review-ship,.review-close'))button.hidden=!!d;
+  for(const button of document.querySelectorAll('.review-edit'))button.disabled=!!d;
+  const chip=document.querySelector('.decision-chip');if(!chip)return;chip.hidden=!d;
+  // Progress of a pending request lives in the agent indicator; the chip names the decision.
+  if(d){const [kind,text]=['requested','preparing'].includes(d.status)?['pending','Ship requested']:decisionTokens[d.status];chip.className='status-token decision-chip '+kind;chip.textContent=text;}
+}
+function renderShell() {
+  const r=state.review; app.replaceChildren();paintBar(r);
+  const sub=el('section','review-sub'),tabs=el('nav','tabs');
   const commits=r.repos.reduce((n,repo)=>n+(repo.commits?.length||0),0);
-  for(const [id,label,count] of [['files','Files',totalFiles()],['commits','Commits',commits],['discussion','Discussion',open]]) {
+  for(const [id,label,count] of [['files','Files',totalFiles()],['commits','Commits',commits],['discussion','Discussion',r.threads.length]]) {
     const b=btn(label,()=>{if(!canNavigate())return;state.tab=id;renderShell();return id==='files'?loadFile():renderOther();},'tab'+(state.tab===id?' active':''));b.append(el('span','count',String(count))); tabs.append(b);
   }
-  tabs.append(el('span','progress',`${r.viewed.length} / ${totalFiles()} files viewed`));header.append(tabs);app.append(header);
+  sub.append(tabs);
+  // One line beside the tabs; click for the whole text.
+  if(r.description){const about=btn(r.description,()=>{state.aboutOpen=!state.aboutOpen;about.classList.toggle('open',state.aboutOpen);about.setAttribute('aria-expanded',String(state.aboutOpen));},'description'+(state.aboutOpen?' open':''));about.title='Show or hide the whole description';about.setAttribute('aria-expanded',String(!!state.aboutOpen));sub.append(about);}
+  const facts=el('div','facts');
+  // Checks recorded as passed on this snapshot: Ship it reuses them.
+  if(r.checks){const n=r.checks.split('\n').length,checks=el('details','checks'),summary=el('summary','',`${n} check${n===1?'':'s'} passed`);summary.title='Recorded as passed on this snapshot · Ship it reuses them';checks.append(summary,el('pre','',r.checks));facts.append(checks);}
+  const add=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.added,0),0), del=r.repos.reduce((n,r)=>n+r.files.reduce((m,f)=>m+f.removed,0),0),stats=el('span','stats');
+  stats.append(el('span','plus',`+${add.toLocaleString()}`),el('span','minus',`−${del.toLocaleString()}`));
+  facts.append(el('span','fact-repos',`${r.repos.length} repo${r.repos.length===1?'':'s'}`),stats,el('span','progress',`${r.viewed.length} / ${totalFiles()} files viewed`));sub.append(facts);app.append(sub);
+  // Filled only when there is something to say: ship result, start progress, agent away.
+  app.append(el('div','live-review-status'));
+  if(globalThis.PreprLive)PreprLive.refresh();
   if(r.snapshot!==r.snapshots[0].id) {const banner=el('div','banner','You’re viewing an earlier snapshot. Comments stay attached to this version.');banner.append(btn('Open latest',()=>{if(canNavigate())return openReview(r.id);}));app.append(banner);}
   if(state.tab==='files') {
     const workspace=el('div','workspace');let width=savedWidth('prepr-sidebar-width',280,180,600);
     workspace.style.setProperty('--sidebar-width',`${Math.min(width,window.innerWidth*.5)}px`);
     const divider=resizeHandle('Resize file list',()=>width,value=>{width=value;workspace.style.setProperty('--sidebar-width',`${value}px`);localStorage.setItem('prepr-sidebar-width',value);},()=>[180,Math.min(600,window.innerWidth*.6)],x=>x-workspace.getBoundingClientRect().left,280);
     divider.classList.add('sidebar-divider');workspace.append(el('aside','sidebar'),divider,el('section','main-panel'));app.append(workspace);renderSidebar();
-    requestAnimationFrame(()=>{document.documentElement.style.setProperty('--header-height',`${workspace.getBoundingClientRect().top}px`);});
   } else app.append(el('section',state.tab==='commits'?'commits-page':'discussion'));
 }
 function renderSidebar() {
@@ -285,9 +304,12 @@ function renderFile() {
 }
 function composer(onSave,onCancel,label='Add a comment') {
   const box=el('form','composer');box.append(el('label','composer-label',label));const input=el('textarea');input.placeholder='Ask a question or suggest a change…';input.setAttribute('aria-label',label);input.maxLength=20000;input.required=true;box.append(input);
-  const error=el('p','draft-error');box.append(error);const actions=el('div','composer-actions');actions.append(el('span','shortcut','Ctrl / ⌘ + Enter to send'));const cancel=btn('Cancel',()=>{state.draft=false;onCancel();});const save=el('button','primary','Post comment');save.type='submit';actions.append(cancel,save);box.append(actions);
+  const error=el('p','draft-error');box.append(error);const actions=el('div','composer-actions');
+  const who=el('label','composer-author','Comment as'),name=el('input');name.id='author';name.maxLength=100;name.value=author();name.setAttribute('aria-label','Comment author');who.append(name);
+  const keep=()=>{localStorage.setItem('prepr-author',name.value.trim()||'Reviewer');name.value=author();};name.addEventListener('change',keep);
+  actions.append(who,el('span','shortcut','Ctrl / ⌘ + Enter to send'));const cancel=btn('Cancel',()=>{state.draft=false;onCancel();});const save=el('button','primary','Post comment');save.type='submit';actions.append(cancel,save);box.append(actions);
   input.addEventListener('input',()=>{state.draft=!!input.value;});
-  box.addEventListener('submit',async event=>{event.preventDefault();if(!input.value.trim())return;save.disabled=true;error.textContent='';try{await onSave(input.value.trim());state.draft=false;}catch(e){error.textContent=e.message;save.disabled=false;}});
+  box.addEventListener('submit',async event=>{event.preventDefault();if(!input.value.trim())return;keep();save.disabled=true;error.textContent='';try{await onSave(input.value.trim());state.draft=false;}catch(e){error.textContent=e.message;save.disabled=false;}});
   input.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();box.requestSubmit();}});setTimeout(()=>input.focus(),0);return box;
 }
 function startFileComment() {
@@ -295,13 +317,13 @@ function startFileComment() {
   document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());
   const area=document.querySelector('.file-discussion'),holder=el('div','reply-composer');
   const anchor={snapshot:state.review.snapshot,...state.selected,side:'file',line:0};
-  holder.append(composer(async body=>{await api('/api/threads',{...anchor,author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Comment saved');},()=>holder.remove(),'Comment on file'));
+  holder.append(composer(async body=>{await api('/api/threads',{...anchor,author:author(),body});await reloadThreads();toast('Comment saved');},()=>holder.remove(),'Comment on file'));
   area.prepend(holder);holder.scrollIntoView({block:'center'});
 }
 function startComment(row,side,line) {
   if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());
   const tr=el('tr','thread-row new-comment-row'),cell=el('td');cell.colSpan=row.children.length;const anchor={snapshot:state.review.snapshot,...state.selected,side,line};
-  cell.append(composer(async body=>{await api('/api/threads',{...anchor,author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Comment saved');},()=>tr.remove(),`Comment on ${side==='old'?'before':'after'} line ${line}`));tr.append(cell);row.after(tr);
+  cell.append(composer(async body=>{await api('/api/threads',{...anchor,author:author(),body});await reloadThreads();toast('Comment saved');},()=>tr.remove(),`Comment on ${side==='old'?'before':'after'} line ${line}`));tr.append(cell);row.after(tr);
 }
 async function reloadThreads(){const feedback=await api(`/api/reviews/${state.review.id}/feedback`);state.review.threads=feedback.threads;state.draft=false;const scroll=document.querySelector('.main-panel')?.scrollTop;renderShell();if(state.tab==='files'){renderFile();document.querySelector('.main-panel').scrollTop=scroll||0;}else renderOther();}
 // Thread turn: agent busy, waiting on you, or waiting on agent.
@@ -309,7 +331,7 @@ function threadActivity(t){
   if(t.status!=='open'||!t.messages.length)return null;const w=state.watcher,last=t.messages.at(-1).author;
   if(w&&w.activity!=='idle'&&w.threads.includes(t.id))return ['working',`${w.author} ${w.activity==='code'?'is changing code…':'is writing a reply…'}`];
   if(w)return last===w.author?['waiting-you','Waiting for your reply']:['waiting-agent',`Waiting for ${w.author}`];
-  return last!==(authorInput.value.trim()||'Reviewer')?['waiting-you','Waiting for your reply']:null;
+  return last!==(author())?['waiting-you','Waiting for your reply']:null;
 }
 // Update badges in place; keeps drafts.
 function paintActivity(){
@@ -319,18 +341,24 @@ function paintActivity(){
   }
 }
 function renderThread(t){
-  const thread=el('article','thread'+(t.status==='resolved'?' resolved':''));thread.dataset.thread=t.id;const top=el('div','thread-top');const anchor=t.origin||t;top.append(el('span','status',t.status==='open'?'Open thread':'Resolved'),el('small','',anchor.side==='file'?'File comment':`${anchor.side==='old'?'Before':'After'} line ${anchor.line}`));
-  const activity=threadActivity(t)||['',''];top.append(el('span','thread-activity '+activity[0],activity[1]));
+  const open=t.status==='open',thread=el('article','thread'+(open?'':' resolved'));thread.dataset.thread=t.id;const top=el('div','thread-top'),anchor=t.origin||t;
+  const activity=threadActivity(t)||['',''],badge=el('span','thread-activity '+activity[0],activity[1]);
+  const decide=btn(open?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:open?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit');
+  if(!open)top.append(el('span','status','Resolved'));
+  // Thread sits under its line: anchor only where that says something more.
+  if(t.carried||anchor.side==='file')top.append(el('small','',anchor.side==='file'?'File comment':`${anchor.side==='old'?'Before':'After'} line ${anchor.line}`));
   if(t.carried)top.append(el('small','carried-note',`Snapshot ${snapshotNumber(t.snapshot_id)}${t.changed?' · code changed since':''}`));// Resolved threads start collapsed; toggle keeps state across re-renders.
-  if(t.status==='resolved'){
+  if(!open){
     const collapsed=!state.expanded.has(t.id);thread.classList.toggle('collapsed',collapsed);
     top.append(el('span','thread-snippet',t.messages[0].body.split('\n')[0]));
     const toggle=btn('',()=>{const now=!thread.classList.toggle('collapsed');if(now)state.expanded.add(t.id);else state.expanded.delete(t.id);toggle.textContent=now?'Hide':`Show ${t.messages.length}`;toggle.setAttribute('aria-expanded',String(now));},'thread-toggle');
-    toggle.textContent=collapsed?`Show ${t.messages.length}`:'Hide';toggle.setAttribute('aria-expanded',String(!collapsed));toggle.title='Show or hide resolved discussion';top.append(toggle);
+    toggle.textContent=collapsed?`Show ${t.messages.length}`:'Hide';toggle.setAttribute('aria-expanded',String(!collapsed));toggle.title='Show or hide resolved discussion';top.append(toggle,decide);
   }
-  top.append(btn(t.status==='open'?'Resolve':'Reopen',async()=>{if(!canNavigate())return;await api(`/api/threads/${t.id}`,{status:t.status==='open'?'resolved':'open'},'PATCH');await reloadThreads();},'review-edit'));thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
-  for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('span','avatar',m.author.slice(0,2).toUpperCase()),el('strong','',m.author),el('time','',time(m.created)),iconBtn('Delete comment','trash',async()=>{if(!canNavigate())return;await api('/api/messages/'+m.id,{},'DELETE');await reloadThreads();toast('Comment deleted');},'delete-comment review-edit'));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
-  const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:authorInput.value.trim()||'Reviewer',body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply review-edit');thread.append(reply);return thread;
+  if(top.children.length)thread.append(top);if(t.changed&&t.code)thread.append(el('pre','anchor-code',t.code));
+  for(const m of t.messages){const msg=el('div','message'),head=el('div','message-head');head.append(el('strong','',m.author),el('time','',time(m.created)),iconBtn('Delete comment','trash',async()=>{if(!canNavigate())return;await api('/api/messages/'+m.id,{},'DELETE');await reloadThreads();toast('Comment deleted');},'delete-comment review-edit quiet'));msg.append(head,el('p','message-body',m.body));thread.append(msg);}
+  const reply=btn('Reply…',()=>{if(!canNavigate())return;document.querySelectorAll('.new-comment-row,.reply-composer').forEach(n=>n.remove());const holder=el('div','reply-composer');holder.append(composer(async body=>{await api(`/api/threads/${t.id}/messages`,{author:author(),body});await reloadThreads();toast('Reply saved');},()=>holder.remove(),'Reply to thread'));thread.append(holder);},'thread-reply review-edit');
+  // Foot: reply, whose turn, resolve. One row.
+  const foot=el('div','thread-foot');foot.append(reply);if(open)foot.append(badge,decide);thread.append(foot);return thread;
 }
 function renderOther(){return state.tab==='commits'?renderCommits():renderDiscussion();}
 function statSpan(added,removed){const n=el('span','stats');n.append(el('span','plus',`+${added}`),el('span','minus',`−${removed}`));return n;}
@@ -375,8 +403,8 @@ const completed=r=>['closed','shipped','blocked'].includes(r.decision?.status);
 async function home(tab){
   if(tab)state.homeTab=tab;state.homeTab=state.homeTab||(new URLSearchParams(location.search).get('tab')==='completed'?'completed':'active');
   const reviews=await api('/api/reviews'),done=reviews.filter(completed),active=reviews.filter(r=>!completed(r));
-  const page=el('section','home'),intro=el('div','home-intro'),copy=el('div');
-  copy.append(el('div','eyebrow','Your workspace'),el('h1','','Reviews before pull requests'),el('p','','Inspect the changes. Leave feedback where it matters.'));intro.append(copy);page.append(intro);
+  state.review=null;paintBar(null);
+  const page=el('section','home');page.append(el('h1','sr-only','Reviews'));
   const tabs=el('nav','tabs home-tabs');
   for(const [id,label,list] of [['active','Active',active],['completed','Completed',done]]){
     const b=btn(label,()=>{const url=new URL(location);url.search=id==='completed'?'?tab=completed':'';history.replaceState(null,'',url);return home(id);},'tab'+(state.homeTab===id?' active':''));b.append(el('span','count',String(list.length)));tabs.append(b);
@@ -384,12 +412,13 @@ async function home(tab){
   page.append(tabs);
   const list=state.homeTab==='completed'?done:active;
   for(const r of list){
-    const item=el('div','review-item'),link=el('a','review-link');link.href=`/?review=${encodeURIComponent(r.id)}`;link.append(el('h2','',r.title),el('p','',r.description));
-    const meta=el('div','meta-line'),d=r.decision;meta.append(el('span','',r.id));
-    if(d){const [cls,text]={closed:['closed','Closed'],shipped:['shipped','PR submitted'],blocked:['blocked','Ship blocked'],requested:['pending','Ship requested'],preparing:['pending','Submitting PRs']}[d.status];meta.append(el('span','status-token '+cls,text));}
-    if(!completed(r))meta.append(el('span','',`${r.openThreads} open threads`));
-    meta.append(el('span','',`Updated ${time(r.updated)}`));link.append(meta);item.append(link);
-    if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!await ask(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`,'Delete'))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review'));
+    // Row: what it is on the left, where it stands on the right.
+    const item=el('div','review-item'),link=el('a','review-link'),what=el('div','review-what'),where=el('div','review-where'),d=r.decision;link.href=`/?review=${encodeURIComponent(r.id)}`;
+    what.append(el('h2','',r.title),el('p','',r.description));
+    if(d){const [cls,text]=decisionTokens[d.status];where.append(el('span','status-token '+cls,text));}
+    else if(r.openThreads)where.append(el('span','status-token open',`${r.openThreads} open thread${r.openThreads===1?'':'s'}`));
+    const meta=el('div','meta-line');meta.append(el('span','',r.id),el('span','',`Updated ${time(r.updated)}`));where.append(meta);link.append(what,where);item.append(link);
+    if(completed(r))item.append(iconBtn('Delete review','trash',async()=>{if(!await ask(`Delete “${r.title}” with its snapshots and comments? This cannot be undone.`,'Delete'))return;await api('/api/reviews/'+encodeURIComponent(r.id),{},'DELETE');toast('Review deleted');await home();},'delete-review quiet'));
     page.append(item);
   }
   if(!list.length){const empty=el('div','empty-state');
