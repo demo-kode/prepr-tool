@@ -34,6 +34,7 @@ README has manifest fields and startup commands.
   title, reviewers, template), open questions. No secrets. Background runs get this text plus
   review, repos, manifest and threads. They never see your chat. Changed facts: rerun `agent-start`
   with new file (starts a new background conversation).
+- For a numbered task, record its exact PR title prefix in the handoff context, e.g. `[#1234]`.
 - Ask user whether to open PrePR. Explicit request to review already counts; never ask twice.
   Yes: `python3 review.py open REVIEW_ID` (VS Code tab when extension installed, else browser).
   Open fails: report it, give URL.
@@ -172,6 +173,10 @@ Prompt starts "You are ..., the unattended background agent". It is whole briefi
   remove generated files; anything ran inside a worktree: `ship-verify` again before commit/push.
 - Branch already has an open PR to its target (user iterating on a sent PR): push updates it.
   Never open a second PR. Keep its reviewers, votes and description unless repo instructions differ.
+- For a numbered task, start every hosted PR title in every affected repo with `[#<task number>]`
+  followed by a space and a short description, e.g. `[#1234] Fix search timeout`.
+  When updating an existing PR, add the prefix once and keep the rest of its title. Verify each
+  title on the hosting platform before reporting the PR as opened or updated.
 - Put `PrePR request: REQUEST_ID` in description of each PR you open, so interrupted attempts
   reconcile. Leave it out of PRs you only update: on retry, PR with this request ID was opened by
   this request, any other open PR on the branch was updated.
